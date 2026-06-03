@@ -24,6 +24,9 @@ build/
 # Installer scripts
 Miniforge3-*.sh
 
+# Large binary test artifacts
+*.nn
+
 # Editor / OS
 .DS_Store
 *.swp

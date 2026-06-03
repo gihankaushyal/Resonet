@@ -319,6 +319,7 @@ class Simulator:
             S.D.raw_pixels = raw_pix
             S.D.to_cbf(cbf_name, toggle_conventions=True)
         S.D.free_all()
+        del S, C, nb_beam  # drop C++ refcounts immediately; don't wait for GC
 
         self.shot_det = shot_det
         self.shot_beam = shot_beam
@@ -391,6 +392,7 @@ class Simulator:
         nominal_data = gpu_detector.get_raw_pixels().as_numpy_array()
         gpu_detector.each_image_free()  # deallocate GPU arrays
         #gpu_detector.free_random_states()
+        del gpu_simulation, SIM  # free C++ backing store immediately; don't wait for GC
         return nominal_data
 
 
