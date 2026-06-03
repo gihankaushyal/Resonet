@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TIME_LEFT=$(squeue --name=ood-virtual-desktop --user=$USER --noheader -o \"%L\" 2>/dev/null | head -1); [ -n \"$TIME_LEFT\" ] && echo \"SLURM time remaining (ood-virtual-desktop): $TIME_LEFT\""
+          }
+        ]
+      }
+    ]
+  }
+}

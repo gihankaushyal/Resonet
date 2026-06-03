@@ -1,0 +1,31 @@
+# Large data directories
+hitfinder_*/
+test_shots*/
+simforge/
+easyBragg/
+
+# HDF5 data files
+*.h5
+*.hdf5
+
+# SLURM logs
+*.log
+
+# Conda/Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+*.so
+
+# Installer scripts
+Miniforge3-*.sh
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
