@@ -81,6 +81,7 @@ def run(args, seeds, jid, njobs, gvec=None):
     """
     import sys
     import gc
+    import resource
     import os
     dirname=os.path.join(os.path.dirname(__file__), "for_tutorial/diffraction_ai_sims_data")
     if not os.path.exists(dirname):
@@ -515,8 +516,10 @@ def run(args, seeds, jid, njobs, gvec=None):
             t = time.time()-t
             times.append(t)
             print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} out of {args.nshot} total (took {t:.4f} sec).", flush=True)
-            if i_shot % 10 == 0:
-                gc.collect()
+            gc.collect()
+            if i_shot % 50 == 0:
+                rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
 
         ave_t = np.mean(times)
         print(f"RANK{jid+1}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)" % np.mean(times))
