@@ -35,6 +35,15 @@ The main package lives in `resonet/resonet/` (a git submodule inside a build-fil
 cd resonet && pip install -e .
 ```
 
+> **Warning:** The active `simtbx_mpi` conda env has a *regular* (non-editable) install at
+> `simforge/envs/simtbx_mpi/lib/python3.9/site-packages/resonet/`.
+> Changes to source files under `resonet/resonet/sims/` are NOT auto-reflected.
+> After editing source files, copy them manually:
+> ```bash
+> cp resonet/resonet/sims/<file>.py simforge/envs/simtbx_mpi/lib/python3.9/site-packages/resonet/sims/
+> ```
+> Or reinstall: `cd resonet && pip install -e .` (takes ~30s).
+
 ## Common Commands
 
 **Simulate diffraction data (MPI, GPU):**
@@ -67,7 +76,7 @@ cd resonet && python -m pytest resonet/tests/ -v
 
 Use `run_hitfinder.sh` as a template. Key SLURM parameters for this cluster:
 - Partition: `general`, QOS: `grp_cxfel`
-- GPU resources: `--gres=gpu:1`
+- GPU resources: `--gres=gpu:N` (use 2–6 depending on rank count; scg020 has 8x H100)
 - Always source `load_resonet.sh` inside the job script
 
 To resume a training run from a checkpoint, use `run_hitfinder_resume.sh` (uses 4 GPUs).
@@ -107,7 +116,14 @@ easyBragg/            # separate package: Python wrappers for nanoBragg (simtbx_
 simforge/             # micromamba-based conda installation (do not edit)
 hitfinder_data*/      # HDF5 simulation output directories (test data)
 hitfinder_100k/       # larger 100k-shot dataset
+hitfinder_10k/        # 10k-shot dataset (current target)
 test_shots*/          # additional test shot datasets
+docs/
+  plans/              # legacy implementation plans
+  specs/              # legacy design specs
+  superpowers/
+    plans/            # feature plans (<feature-name>-<YYYY-MM-DD>.md)
+    specs/            # feature specs (<feature-name>-<YYYY-MM-DD>.md)
 ```
 
 ## Data Format
@@ -118,6 +134,26 @@ Simulation outputs and training data are stored as HDF5 files (`compressed*.h5`)
 - Optional `geom` dataset: detector geometry parameters used by orientation models
 
 The `resonet-mergefiles` script combines per-rank HDF5 outputs from MPI runs into a single master file for training.
+
+## Feature Development Workflow
+
+When discussing or implementing a new feature, always follow this sequence:
+
+1. **`/superpowers:brainstorming`** — explore intent, requirements, and design options
+2. **`/feature-dev:feature-dev`** — deep codebase analysis and architecture blueprint
+3. Write to **`docs/superpowers/`** using the same `<feature-name>-<YYYY-MM-DD>` naming scheme for both:
+   - `docs/superpowers/specs/<feature-name>-<YYYY-MM-DD>.md` — design decisions, data flow, invariants
+   - `docs/superpowers/plans/<feature-name>-<YYYY-MM-DD>.md` — step-by-step implementation with exact file/line targets
+4. **`/superpowers:executing-plans`** — execute the plan with review checkpoints
+
+## Branching Rules
+
+- **Significant features** (new functionality, non-trivial refactors) must be developed on a dedicated branch named after the feature (e.g., `my-feature-name`).
+- **Branch naming**: use kebab-case, descriptive, matching the feature name used in `docs/superpowers/`.
+- **After merging to main**: do NOT delete the feature branch — it may be revisited in future sessions.
+- **Before opening a PR into main**, always run both:
+  1. `/code-review` — checks for bugs, correctness, and code quality
+  2. `/pr-review-toolkit:review-pr` — ensures compliance with project conventions
 
 ## Claude Code Integration
 

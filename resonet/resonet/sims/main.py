@@ -81,6 +81,7 @@ def run(args, seeds, jid, njobs, gvec=None):
     """
     import sys
     import gc
+    import ctypes
     import resource
     import os
     dirname=os.path.join(os.path.dirname(__file__), "for_tutorial/diffraction_ai_sims_data")
@@ -101,6 +102,8 @@ def run(args, seeds, jid, njobs, gvec=None):
     from resonet.sims import paths_and_const
 
     from resonet.sims.simulator import Simulator, reso2radius
+
+    _libc = ctypes.CDLL("libc.so.6")
 
     np.random.seed(seeds[jid])
 
@@ -517,7 +520,8 @@ def run(args, seeds, jid, njobs, gvec=None):
             times.append(t)
             print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} out of {args.nshot} total (took {t:.4f} sec).", flush=True)
             gc.collect()
-            if i_shot % 50 == 0:
+            _libc.malloc_trim(0)
+            if i_shot % 10 == 0:
                 rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                 print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
 

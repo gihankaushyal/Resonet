@@ -257,6 +257,7 @@ class Simulator:
             reso, Bfac_img = make_sims.get_Bfac_img(STOL,high_reso)
         else:
             reso, Bfac_img = make_sims.get_Bfac_img(STOL)
+        del STOL
 
         if self.gpud is None:
             plastic = make_sims.random_bg(shot_det, shot_beam, plastic_stol, roi=roi)
@@ -291,6 +292,7 @@ class Simulator:
             S.D.add_noise()
             noise_img = S.D.raw_pixels.as_numpy_array().reshape(img_sh)
             noise_imgs.append(noise_img)
+        del Bfac_img, all_spots
 
         param_dict = {"reso": reso,
                       "multi_lattice": use_multi,
@@ -392,6 +394,7 @@ class Simulator:
         nominal_data = gpu_detector.get_raw_pixels().as_numpy_array()
         gpu_detector.each_image_free()  # deallocate GPU arrays
         #gpu_detector.free_random_states()
+        del gpu_detector
         del gpu_simulation, SIM  # free C++ backing store immediately; don't wait for GC
         return nominal_data
 
