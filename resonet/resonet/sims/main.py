@@ -526,7 +526,7 @@ def run(args, seeds, jid, njobs, gvec=None):
                 print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
 
         ave_t = np.mean(times)
-        print(f"RANK{jid+1}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)" % np.mean(times))
+        print(f"RANK{jid+1}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)")
 
         out.attrs["cbf_names"] = cbf_names
 
