@@ -39,16 +39,18 @@ def main():
     with DeviceWrapper(dev_id) as _:
         try:
             run(args_parsed, seeds, effective_rank, total_ranks, gvec=gvec)
-        except Exception as err:
+        except Exception:
+            import sys
+            import traceback
+            tb_s = traceback.format_exc()
+            print(f"RANK {effective_rank}: FATAL ERROR\n{tb_s}", file=sys.stderr, flush=True)
             err_file = os.path.join(args_parsed.outdir, "rank%d_failure.err" % effective_rank)
-            with open(err_file, "w") as o:
-                from traceback import format_tb
-                import sys
-                _, _, tb = sys.exc_info()
-                tb_s = "".join(format_tb(tb))
-                err_s = str(err) + "\n" + tb_s
-                o.write(err_s)
-            raise err
+            try:
+                with open(err_file, "w") as o:
+                    o.write(tb_s)
+            except OSError as file_err:
+                print(f"RANK {effective_rank}: could not write {err_file}: {file_err}", file=sys.stderr, flush=True)
+            raise
 
 
 if __name__=="__main__":
