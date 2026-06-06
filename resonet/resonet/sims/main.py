@@ -103,7 +103,14 @@ def run(args, seeds, jid, njobs, gvec=None):
 
     from resonet.sims.simulator import Simulator, reso2radius
 
-    _libc = ctypes.CDLL("libc.so.6")
+    try:
+        _libc = ctypes.CDLL("libc.so.6")
+        _libc.malloc_trim.restype = ctypes.c_int
+        _libc.malloc_trim.argtypes = [ctypes.c_size_t]
+        _malloc_trim = _libc.malloc_trim
+    except OSError as _e:
+        print(f"RANK {jid+1}/{njobs}: WARNING — libc.so.6 unavailable ({_e}); malloc_trim skipped.", flush=True)
+        _malloc_trim = None
 
     np.random.seed(seeds[jid])
 
@@ -520,13 +527,14 @@ def run(args, seeds, jid, njobs, gvec=None):
             times.append(t)
             print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} out of {args.nshot} total (took {t:.4f} sec).", flush=True)
             gc.collect()
-            _libc.malloc_trim(0)
+            if _malloc_trim is not None:
+                _malloc_trim(0)
             if i_shot % 10 == 0:
                 rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                 print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
 
         ave_t = np.mean(times)
-        print(f"RANK{jid+1}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)")
+        print(f"RANK {jid+1}/{njobs}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)", flush=True)
 
         out.attrs["cbf_names"] = cbf_names
 
