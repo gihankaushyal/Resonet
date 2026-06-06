@@ -54,6 +54,12 @@ def args(use_joblib=False):
     parser.add_argument("--xtalShape", default="gauss", type = str, help="shape factor of the relp, can be gauss, square, or gauss_star (default=gauss)")
     parser.add_argument("--shotsPerEx", default=1, type=int, help="number of shots per example, if more than 1, each shot will have same params but a random Umat")
     parser.add_argument("--randHits", action="store_true", help="generate diffraction+background images and background-only images with equal probability")
+    parser.add_argument("--rankOffset", default=0, type=int,
+                        help="Offset added to each MPI rank's effective ID. Use with --totalRanks to resume a partial run. "
+                             "E.g. --rankOffset 10 --totalRanks 20 re-runs ranks 10-19 of a 20-rank job.")
+    parser.add_argument("--totalRanks", default=None, type=int,
+                        help="Total number of ranks in the full job (for shot splitting and seed generation). "
+                             "Defaults to COMM.size if not specified.")
     if use_joblib:
         parser.add_argument("--njobs", default=None, type=int, help="number of jobs")
     args = parser.parse_args()
@@ -74,6 +80,9 @@ def run(args, seeds, jid, njobs, gvec=None):
     :param gvec: randomly rotate the crystals about this axis only
     """
     import sys
+    import gc
+    import ctypes
+    import resource
     import os
     dirname=os.path.join(os.path.dirname(__file__), "for_tutorial/diffraction_ai_sims_data")
     if not os.path.exists(dirname):
@@ -93,6 +102,8 @@ def run(args, seeds, jid, njobs, gvec=None):
     from resonet.sims import paths_and_const
 
     from resonet.sims.simulator import Simulator, reso2radius
+
+    _libc = ctypes.CDLL("libc.so.6")
 
     np.random.seed(seeds[jid])
 
@@ -508,6 +519,11 @@ def run(args, seeds, jid, njobs, gvec=None):
             t = time.time()-t
             times.append(t)
             print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} out of {args.nshot} total (took {t:.4f} sec).", flush=True)
+            gc.collect()
+            _libc.malloc_trim(0)
+            if i_shot % 10 == 0:
+                rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
 
         ave_t = np.mean(times)
         print(f"RANK{jid+1}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)" % np.mean(times))

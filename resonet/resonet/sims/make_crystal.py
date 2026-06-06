@@ -12,6 +12,10 @@ from simtbx.diffBragg import utils as db_utils
 from resonet.sims import paths_and_const
 from resonet.sims import  process_pdb
 
+# Per-rank cache: avoids reloading the same MTZ/PDB files on every shot.
+# 117 PDBs x ~14.5 MB C++ flex per miller_array = ~1.7 GB total, bounded.
+_miller_array_cache = {}
+
 
 def convert_inds(amps, hkls, pdb_file, d_min=1.2):
     """
@@ -78,11 +82,13 @@ def load_crystal(folder, rot_mat=None, scale=1, cut_1p2=False, xtal_shape="squar
     fmodel_file = os.path.join(folder, "fmodel.mtz")
     if cut_1p2:
         fmodel_file = os.path.join(folder, "fmodel_1p2.mtz")
-    ma = any_reflection_file(fmodel_file).as_miller_arrays()[0]
-    if ma.is_complex_array():
-        ma = ma.as_amplitude_array()
-    C.miller_array = ma
-    C.symbol = ma.space_group_info().type().lookup_symbol()
+    if fmodel_file not in _miller_array_cache:
+        ma = any_reflection_file(fmodel_file).as_miller_arrays()[0]
+        if ma.is_complex_array():
+            ma = ma.as_amplitude_array()
+        _miller_array_cache[fmodel_file] = ma
+    C.miller_array = _miller_array_cache[fmodel_file]
+    C.symbol = _miller_array_cache[fmodel_file].space_group_info().type().lookup_symbol()
     return C
 
 
