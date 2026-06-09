@@ -55,7 +55,7 @@ class Simulator:
                  pdb_name=None, plastic_stol=None, dev=0, mos_dom_override=None, vary_background_scale=False,
                  randomize_dist=None, randomize_wavelen=None, randomize_center=False,
                  randomize_scale=False, low_bg_chance=0, uniform_reso=False, roi=None,
-                 old_multi_spread=True, cbf_name=None):
+                 old_multi_spread=True, cbf_name=None, multi_panel=False):
         """
 
         :param rot_mat: specific orientation matrix for crystal
@@ -78,6 +78,8 @@ class Simulator:
            This was the method used for the multi lattice model reported on in: https://doi.org/10.1107/S2059798323010586 
         :cbf_name: if provided, a raw CBF image will be written. It can be read with ADXV and dials.image_viewer
             but not the python package fabio (for reasons unknown)
+        :multi_panel: if True and the detector has more than 1 panel, keep raw_pixels as a flat 1D array
+            instead of reshaping to (ydim, xdim). CBF writing is also skipped in this mode.
         :return: parameters and simulated image
         """
         if multi_lattice_chance > 0:
@@ -196,7 +198,10 @@ class Simulator:
             S.D.add_nanoBragg_spots()
         spots = S.D.raw_pixels.as_numpy_array()
         xdim, ydim = shot_det[0].get_image_size()
-        img_sh = ydim, xdim
+        if multi_panel and len(shot_det) > 1:
+            img_sh = (spots.size,)
+        else:
+            img_sh = ydim, xdim
         spots = spots.reshape(img_sh)
         use_multi = np.random.random() < multi_lattice_chance
         ang_sigma = 0
@@ -311,7 +316,7 @@ class Simulator:
                       "yaw_deg": yaw_angle*180/np.pi,
                       "wavelen_data": None}
 
-        if cbf_name:
+        if cbf_name and not (multi_panel and len(shot_det) > 1):
             raw_pix = deepcopy(S.D.raw_pixels)
             if self.mask is not None:
                 raw_pix = raw_pix.as_numpy_array().ravel()
