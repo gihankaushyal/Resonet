@@ -7,7 +7,7 @@ from dxtbx.model.detector import DetectorFactory
 def _parse_axis(s: str) -> tuple:
     """Parse CrystFEL axis string e.g. '-0.999991x +0.004221y' to (x, y, z)."""
     x = y = z = 0.0
-    for m in re.finditer(r'([+-]?\d+\.?\d*(?:[eE][+-]?\d+)?)\s*([xyz])', s):
+    for m in re.finditer(r'([+-]?(?:\d+\.?\d*|\d*\.\d+)(?:[eE][+-]?\d+)?)\s*([xyz])', s):
         v, a = float(m.group(1)), m.group(2)
         if a == 'x':
             x = v
