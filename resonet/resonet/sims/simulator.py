@@ -162,7 +162,7 @@ class Simulator:
                                           divergence=paths_and_const.DIVERGENCE_MRAD / 1e3 * 180 / np.pi)
 
         else:
-            shot_air_and_water = None
+            shot_air_and_water = self.air_and_water
             redo_air_water = False
             air_and_water = self.air_and_water
             STOL = self.STOL
@@ -268,7 +268,13 @@ class Simulator:
             plastic = make_sims.random_bg(shot_det, shot_beam, plastic_stol, roi=roi)
             bg = plastic + shot_air_and_water
         else:
-            bg = self.sim_background(shot_det, shot_beam, dev, plastic_stol, redo_air_water) 
+            bg = self.sim_background(shot_det, shot_beam, dev, plastic_stol, redo_air_water)
+
+        # In multi-panel flat mode (img_sh is 1D) bg and Bfac_img are computed for
+        # the first panel only and may be 2D; reshape to match img_sh so multiplication works.
+        if len(img_sh) == 1:
+            Bfac_img = Bfac_img.reshape(img_sh)
+            bg = bg.reshape(img_sh)
 
         if paths_and_const.FLAT_BACKGROUND:
             bg = np.ones_like(bg)* np.mean(bg)
