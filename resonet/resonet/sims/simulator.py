@@ -32,6 +32,30 @@ class Simulator:
         # stol of every pixel:
         self.STOL = make_sims.get_theta_map(self.DET, self.BEAM)
 
+        # per-panel caches for multi-panel (CXI) simulation
+        if len(self.DET) > 1:
+            from simtbx.nanoBragg.utils import sim_background as _nb_sim_bg
+            self._all_stols = make_sims.get_theta_map(self.DET, self.BEAM, panel_id='all')
+            self._all_air_and_water = [
+                _nb_sim_bg(self.DET, self.BEAM,
+                           [self.BEAM.get_wavelength()], [1],
+                           paths_and_const.FLUX, pidx=pid,
+                           molecular_weight=14, sample_thick_mm=5,
+                           Fbg_vs_stol=make_sims.load_stol(paths_and_const.AIR_STOL),
+                           density_gcm3=1.2e-3).as_numpy_array()
+                + _nb_sim_bg(self.DET, self.BEAM,
+                             [self.BEAM.get_wavelength()], [1],
+                             paths_and_const.FLUX, pidx=pid,
+                             molecular_weight=18,
+                             sample_thick_mm=paths_and_const.XTALSIZE_MM,
+                             Fbg_vs_stol=make_sims.load_stol(paths_and_const.WATER_STOL),
+                             density_gcm3=1).as_numpy_array()
+                for pid in range(len(self.DET))
+            ]
+        else:
+            self._all_stols = [self.STOL]
+            self._all_air_and_water = [self.air_and_water]
+
         self.nb_beam = make_crystal.load_beam(self.BEAM,
                                       divergence=paths_and_const.DIVERGENCE_MRAD / 1e3 * 180 / np.pi)
         self.cuda=cuda
@@ -152,20 +176,46 @@ class Simulator:
                 shot_det.rotate_around_origin(slow_axis,yaw_angle)
 
             if self.gpud is None:
-                shot_air_and_water = make_sims.get_background(shot_det, shot_beam, roi=roi)
+                if multi_panel and len(shot_det) > 1:
+                    from simtbx.nanoBragg.utils import sim_background as _nb_sim_bg
+                    shot_air_and_water = [
+                        _nb_sim_bg(shot_det, shot_beam,
+                                   [shot_beam.get_wavelength()], [1],
+                                   paths_and_const.FLUX, pidx=pid,
+                                   molecular_weight=14, sample_thick_mm=5,
+                                   Fbg_vs_stol=make_sims.load_stol(paths_and_const.AIR_STOL),
+                                   density_gcm3=1.2e-3, roi=roi).as_numpy_array()
+                        + _nb_sim_bg(shot_det, shot_beam,
+                                     [shot_beam.get_wavelength()], [1],
+                                     paths_and_const.FLUX, pidx=pid,
+                                     molecular_weight=18,
+                                     sample_thick_mm=paths_and_const.XTALSIZE_MM,
+                                     Fbg_vs_stol=make_sims.load_stol(paths_and_const.WATER_STOL),
+                                     density_gcm3=1, roi=roi).as_numpy_array()
+                        for pid in range(len(shot_det))
+                    ]
+                else:
+                    shot_air_and_water = make_sims.get_background(shot_det, shot_beam, roi=roi)
             redo_air_water = True
 
-            # stol of every pixel:
-            STOL = make_sims.get_theta_map(shot_det, shot_beam)
+            # stol of every pixel — per panel list when multi_panel
+            if multi_panel and len(shot_det) > 1:
+                STOL_list = make_sims.get_theta_map(shot_det, shot_beam, panel_id='all')
+            else:
+                STOL_list = [make_sims.get_theta_map(shot_det, shot_beam)]
 
             nb_beam = make_crystal.load_beam(shot_beam,
                                           divergence=paths_and_const.DIVERGENCE_MRAD / 1e3 * 180 / np.pi)
 
         else:
-            shot_air_and_water = self.air_and_water
+            if multi_panel and len(self.DET) > 1:
+                shot_air_and_water = self._all_air_and_water
+                STOL_list = self._all_stols
+            else:
+                shot_air_and_water = self.air_and_water
+                STOL_list = [self.STOL]
             redo_air_water = False
             air_and_water = self.air_and_water
-            STOL = self.STOL
             nb_beam = self.nb_beam
             shot_beam = self.BEAM
             shot_det = self.DET
@@ -191,18 +241,33 @@ class Simulator:
             print("Warning: Trying to use CUDA, but no simtbx CUDA install available.")
             self.cuda = False
 
-        if self.cuda:
-            S.D.device_Id = dev
-            S.D.add_nanoBragg_spots_cuda()
-        else:
-            S.D.add_nanoBragg_spots()
-        spots = S.D.raw_pixels.as_numpy_array()
         xdim, ydim = shot_det[0].get_image_size()
-        if multi_panel and len(shot_det) > 1:
+        do_multi_panel = multi_panel and len(shot_det) > 1
+        n_panels = len(shot_det)
+
+        if do_multi_panel:
+            # Loop over all panels — same crystal (A-matrix, mosaic) for every panel;
+            # only the detector geometry changes via S.panel_id setter.
+            panel_pixels = []
+            for pid in range(n_panels):
+                S.panel_id = pid   # repoints S.D geometry; A-matrix unchanged
+                S.D.device_Id = dev
+                if self.cuda:
+                    S.D.add_nanoBragg_spots_cuda()
+                else:
+                    S.D.add_nanoBragg_spots()
+                panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel())
+            spots = np.concatenate(panel_pixels)
             img_sh = (spots.size,)
         else:
+            if self.cuda:
+                S.D.device_Id = dev
+                S.D.add_nanoBragg_spots_cuda()
+            else:
+                S.D.add_nanoBragg_spots()
+            spots = S.D.raw_pixels.as_numpy_array()
             img_sh = ydim, xdim
-        spots = spots.reshape(img_sh)
+            spots = spots.reshape(img_sh)
         use_multi = np.random.random() < multi_lattice_chance
         ang_sigma = 0
         num_additional_lat = 0
@@ -232,15 +297,28 @@ class Simulator:
                     print("additional multi lattice sim %d" % (i_p+1), flush=True)
                 Umat_p = np.dot(perturb, Umat)
                 nominal_crystal.set_U(tuple(Umat_p.ravel()))
-                S.D.Amatrix = sim_data.Amatrix_dials2nanoBragg(nominal_crystal)
+                new_Amat = sim_data.Amatrix_dials2nanoBragg(nominal_crystal)
 
-                S.D.raw_pixels *= 0
-                if self.cuda:
-                    S.D.add_nanoBragg_spots_cuda()
+                if do_multi_panel:
+                    extra_panel_pixels = []
+                    for pid in range(n_panels):
+                        S.panel_id = pid
+                        S.D.Amatrix = new_Amat
+                        S.D.device_Id = dev
+                        if self.cuda:
+                            S.D.add_nanoBragg_spots_cuda()
+                        else:
+                            S.D.add_nanoBragg_spots()
+                        extra_panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel())
+                    this_latt_spots = np.concatenate(extra_panel_pixels)
                 else:
-                    S.D.add_nanoBragg_spots()
-
-                this_latt_spots = S.D.raw_pixels.as_numpy_array()
+                    S.D.Amatrix = new_Amat
+                    S.D.raw_pixels *= 0
+                    if self.cuda:
+                        S.D.add_nanoBragg_spots_cuda()
+                    else:
+                        S.D.add_nanoBragg_spots()
+                    this_latt_spots = S.D.raw_pixels.as_numpy_array()
                 if use_multi:
                     spots += this_latt_spots
                 else:
@@ -258,23 +336,41 @@ class Simulator:
         else:
             assert os.path.exists(plastic_stol)
 
-        if uniform_reso:
-            reso, Bfac_img = make_sims.get_Bfac_img(STOL,high_reso)
+        if do_multi_panel:
+            reso, Bfac_img = make_sims.get_Bfac_img_flat(
+                STOL_list, high_reso if uniform_reso else None)
         else:
-            reso, Bfac_img = make_sims.get_Bfac_img(STOL)
-        del STOL
+            hres = high_reso if uniform_reso else None
+            reso, Bfac_img = make_sims.get_Bfac_img(STOL_list[0], hres)
+        del STOL_list
 
         if self.gpud is None:
-            plastic = make_sims.random_bg(shot_det, shot_beam, plastic_stol, roi=roi)
-            bg = plastic + shot_air_and_water
+            if do_multi_panel:
+                from simtbx.nanoBragg.utils import sim_background as _nb_sim_bg
+                bg_panels = []
+                for pid in range(n_panels):
+                    plastic_pid = _nb_sim_bg(
+                        shot_det, shot_beam,
+                        [shot_beam.get_wavelength()], [1],
+                        paths_and_const.FLUX, pidx=pid,
+                        molecular_weight=12,
+                        sample_thick_mm=paths_and_const.XTALSIZE_MM,
+                        Fbg_vs_stol=make_sims.load_stol(plastic_stol),
+                        density_gcm3=1, roi=roi).as_numpy_array()
+                    aw = (shot_air_and_water[pid]
+                          if isinstance(shot_air_and_water, list)
+                          else shot_air_and_water)
+                    bg_panels.append(plastic_pid.ravel() + aw.ravel())
+                bg = np.concatenate(bg_panels)
+            else:
+                plastic = make_sims.random_bg(shot_det, shot_beam, plastic_stol, roi=roi)
+                bg = plastic + shot_air_and_water
         else:
-            bg = self.sim_background(shot_det, shot_beam, dev, plastic_stol, redo_air_water)
-
-        # In multi-panel flat mode (img_sh is 1D) bg and Bfac_img are computed for
-        # the first panel only and may be 2D; reshape to match img_sh so multiplication works.
-        if len(img_sh) == 1:
-            Bfac_img = Bfac_img.reshape(img_sh)
-            bg = bg.reshape(img_sh)
+            if do_multi_panel:
+                bg = self.sim_background_multipanel(
+                    shot_det, shot_beam, dev, plastic_stol, redo_air_water)
+            else:
+                bg = self.sim_background(shot_det, shot_beam, dev, plastic_stol, redo_air_water)
 
         if paths_and_const.FLAT_BACKGROUND:
             bg = np.ones_like(bg)* np.mean(bg)
@@ -288,6 +384,8 @@ class Simulator:
             if self.verbose:
                 print("Scaling background by %.3f" % bg_scale)
 
+        if do_multi_panel:
+            S.panel_id = 0  # noise params are geometry-independent; reset for cleanliness
         make_sims.set_noise(S.D)
         noise_imgs = []
         all_spots_scaled = []
@@ -408,6 +506,47 @@ class Simulator:
         del gpu_detector
         del gpu_simulation, SIM  # free C++ backing store immediately; don't wait for GC
         return nominal_data
+
+    def sim_background_multipanel(self, det, beam, dev, stol_name, redo_air_water=False):
+        """Like sim_background but loops over all panels for correct per-panel geometry.
+
+        Returns a flat 1D numpy array of background pixels for all panels concatenated
+        in panel order (matching _pixel_offsets from geom_parser).
+        """
+        spectrum = [(beam.get_wavelength(), 1)]
+        xray_beams = get_xray_beams(spectrum, beam)
+        panel_bgs = []
+        for pid in range(len(det)):
+            SIM = nanoBragg(det, beam, panel_id=pid)
+            SIM.beamsize_mm = paths_and_const.BEAM_SIZE_MM
+            SIM.xray_beams = xray_beams
+            SIM.flux = paths_and_const.FLUX
+            SIM.device_Id = dev
+            SIM.Fbg_vs_stol = make_sims.load_stol(stol_name)
+            SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
+            SIM.amorphous_density_gcm3 = 1
+            SIM.amorphous_molecular_weight_Da = 12
+            gpu_sim = self.exascale_api(nanoBragg=SIM)
+            gpu_sim.allocate()
+            gpu_det = self.gpud(deviceId=dev, detector=det, beam=beam)
+            gpu_det.each_image_allocate()
+            gpu_det.scale_in_place(0)
+            gpu_sim.add_background(gpu_det)
+            if redo_air_water:
+                for mw, thick, density, stol_f in [
+                    (14, 5, 1.2e-3, paths_and_const.AIR_STOL),
+                    (18, paths_and_const.XTALSIZE_MM, 1, paths_and_const.WATER_STOL),
+                ]:
+                    SIM.Fbg_vs_stol = make_sims.load_stol(stol_f)
+                    SIM.amorphous_sample_thick_mm = thick
+                    SIM.amorphous_density_gcm3 = density
+                    SIM.amorphous_molecular_weight_Da = mw
+                    gpu_sim.add_background(gpu_det)
+            gpu_det.write_raw_pixels(SIM)  # copies panel pid pixels → SIM.raw_pixels
+            panel_bgs.append(SIM.raw_pixels.as_numpy_array().ravel())
+            gpu_det.each_image_free()
+            del gpu_det, gpu_sim, SIM
+        return np.concatenate(panel_bgs)
 
 
 def reso2radius(reso, DET, BEAM):

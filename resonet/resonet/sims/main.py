@@ -331,13 +331,13 @@ def run(args, seeds, jid, njobs, gvec=None):
                 multi_panel=True,
             )
             flat_img = imgs[0]
+            assert flat_img.size == sum(pm['n_fast'] * pm['n_slow'] for pm in _panel_map), (
+                f"flat_img size {flat_img.size} != expected "
+                f"{sum(pm['n_fast']*pm['n_slow'] for pm in _panel_map)} panel pixels"
+            )
             unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
             for pm, pix_off in zip(_panel_map, _pixel_offsets):
                 n_px = pm['n_fast'] * pm['n_slow']
-                if pix_off + n_px > flat_img.size:
-                    # nanoBragg only simulates one panel at a time (panel 0);
-                    # panels beyond that have no data and are left as zero.
-                    continue
                 panel_data = flat_img[pix_off:pix_off + n_px].reshape(
                     pm['n_slow'], pm['n_fast']
                 )
