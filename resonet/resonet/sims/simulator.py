@@ -562,38 +562,27 @@ def reso2radius(reso, DET, BEAM):
 
 
 def shift_center(det, delta_x, delta_y):
-    """
-    :param det: dxtbx detector model (single panel)
-    :param delta_x: beam center shift in pixels (fast dim)
-    :param delta_y: beam center shift in pixels (slow dim)
-    :return: dxtbx detector model with shifted center
-    """
-    dd = det[0].to_dict()
-    F = np.array(dd["fast_axis"])
-    S = np.array(dd["slow_axis"])
-    O = np.array(dd['origin'])
-    pixsize = det[0].get_pixel_size()[0]
-    O2 = O + F * pixsize * delta_x + S * pixsize * delta_y
-    dd["origin"] = tuple(O2)
+    """Shift beam center for all panels in a detector."""
     new_det = Detector()
-    new_pan = Panel.from_dict(dd)
-    new_det.add_panel(new_pan)
+    for panel in det:
+        dd = panel.to_dict()
+        F = np.array(dd["fast_axis"])
+        S = np.array(dd["slow_axis"])
+        O = np.array(dd['origin'])
+        pixsize = panel.get_pixel_size()[0]
+        dd["origin"] = tuple(O + F * pixsize * delta_x + S * pixsize * delta_y)
+        new_det.add_panel(Panel.from_dict(dd))
     return new_det
 
 def shift_distance(det, delta_z):
-    """
-    :param det: dxtbx detector model (single panel)
-    :param delta_z: distance shift in millimeters
-    :return: dxtbx detector model with shifted center
-    """
-    dd = det[0].to_dict()
-    F = np.array(dd["fast_axis"])
-    S = np.array(dd["slow_axis"])
-    O = np.array(dd['origin'])
-    Orth = np.cross(F,S)
-    O2 = O + Orth*delta_z
-    dd["origin"] = tuple(O2)
+    """Shift detector distance for all panels in a detector."""
     new_det = Detector()
-    new_pan = Panel.from_dict(dd)
-    new_det.add_panel(new_pan)
+    for panel in det:
+        dd = panel.to_dict()
+        F = np.array(dd["fast_axis"])
+        S = np.array(dd["slow_axis"])
+        O = np.array(dd['origin'])
+        Orth = np.cross(F, S)
+        dd["origin"] = tuple(O + Orth * delta_z)
+        new_det.add_panel(Panel.from_dict(dd))
     return new_det
