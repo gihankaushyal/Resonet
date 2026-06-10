@@ -516,14 +516,15 @@ class Simulator:
             SIM.beamsize_mm = paths_and_const.BEAM_SIZE_MM
             SIM.xray_beams = xray_beams
             SIM.flux = paths_and_const.FLUX
-            SIM.device_Id = dev
             SIM.Fbg_vs_stol = make_sims.load_stol(stol_name)
             SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
             SIM.amorphous_density_gcm3 = 1
             SIM.amorphous_molecular_weight_Da = 12
+            # gpud(nanoBragg=SIM) gives cu_n_panels=1 — avoids detector.cu:195 assert.
+            # get_raw_pixels() has no panel-count restriction; write_raw_pixels() does.
             gpu_sim = self.exascale_api(nanoBragg=SIM)
             gpu_sim.allocate()
-            gpu_det = self.gpud(deviceId=dev, detector=det, beam=beam)
+            gpu_det = self.gpud(deviceId=dev, nanoBragg=SIM)
             gpu_det.each_image_allocate()
             gpu_det.scale_in_place(0)
             gpu_sim.add_background(gpu_det)
@@ -537,8 +538,7 @@ class Simulator:
                     SIM.amorphous_density_gcm3 = density
                     SIM.amorphous_molecular_weight_Da = mw
                     gpu_sim.add_background(gpu_det)
-            gpu_det.write_raw_pixels(SIM)  # copies panel pid pixels → SIM.raw_pixels
-            panel_bgs.append(SIM.raw_pixels.as_numpy_array().ravel())
+            panel_bgs.append(gpu_det.get_raw_pixels().as_numpy_array().ravel())
             gpu_det.each_image_free()
             del gpu_det, gpu_sim, SIM
         return np.concatenate(panel_bgs)
