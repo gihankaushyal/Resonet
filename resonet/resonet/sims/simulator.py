@@ -67,11 +67,12 @@ class Simulator:
         self.xtal_shape = "gauss"  # shape of the RELP, can be square, gauss, or gauss_star
         self.shots_per_example = 1  # if provided simulate will return multiple images, each with a different crystal orientation and noise
         self.mask = None  # place holder for numpy-style pixel mask
-        self.gpud = self.exascale_api = None
+        self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
                 self.gpud = get_exascale("gpu_detector", "cuda")
                 self.exascale_api = get_exascale("exascale_api", "cuda")
+                self.gpu_channels_type = get_exascale("gpu_energy_channels", "cuda")
             except ImportError:
                 print("Warning, simtbx_gpu_ext not installed, background simulation will be slow!")
 
@@ -245,15 +246,28 @@ class Simulator:
         do_multi_panel = multi_panel and len(shot_det) > 1
         n_panels = len(shot_det)
 
-        if do_multi_panel:
-            # Loop over all panels — same crystal (A-matrix, mosaic) for every panel;
-            # only the detector geometry changes via S.panel_id setter.
-            # Always use CPU (add_nanoBragg_spots) for the per-panel loop: the CUDA
-            # path allocates GPU state for panel 0 only and does not support mid-flight
-            # panel switching via S.panel_id.
+        if do_multi_panel and self.gpu_channels_type is not None:
+            # GPU path: add_energy_channel_from_gpu_amplitudes loops over gdt.cu_n_panels
+            # internally (simulation.cu:121), one kernel launch covers all panels.
+            fhkl_indices, fhkl_amps = S.D.Fhkl_tuple[:2]
+            gpu_channels = self.gpu_channels_type(deviceId=dev)
+            gpu_channels.structure_factors_to_GPU_direct(0, fhkl_indices, fhkl_amps)
+            gpu_sim = self.exascale_api(nanoBragg=S.D)
+            gpu_sim.allocate()
+            gpu_det = self.gpud(deviceId=dev, detector=shot_det, beam=shot_beam)
+            gpu_det.each_image_allocate()
+            gpu_det.scale_in_place(0)
+            gpu_sim.add_energy_channel_from_gpu_amplitudes(0, gpu_channels, gpu_det)
+            all_px = gpu_det.get_raw_pixels().as_numpy_array()  # (n_panels, slow, fast)
+            spots = np.concatenate([all_px[pid].ravel() for pid in range(n_panels)])
+            img_sh = (spots.size,)
+            gpu_det.each_image_free()
+            del gpu_det, gpu_sim, gpu_channels
+        elif do_multi_panel:
+            # CPU fallback when GPU not available
             panel_pixels = []
             for pid in range(n_panels):
-                S.panel_id = pid   # repoints S.D geometry; A-matrix unchanged
+                S.panel_id = pid
                 S.D.add_nanoBragg_spots()
                 panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel().copy())
             spots = np.concatenate(panel_pixels)
