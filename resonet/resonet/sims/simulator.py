@@ -248,15 +248,14 @@ class Simulator:
         if do_multi_panel:
             # Loop over all panels — same crystal (A-matrix, mosaic) for every panel;
             # only the detector geometry changes via S.panel_id setter.
+            # Always use CPU (add_nanoBragg_spots) for the per-panel loop: the CUDA
+            # path allocates GPU state for panel 0 only and does not support mid-flight
+            # panel switching via S.panel_id.
             panel_pixels = []
             for pid in range(n_panels):
                 S.panel_id = pid   # repoints S.D geometry; A-matrix unchanged
-                S.D.device_Id = dev
-                if self.cuda:
-                    S.D.add_nanoBragg_spots_cuda()
-                else:
-                    S.D.add_nanoBragg_spots()
-                panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel())
+                S.D.add_nanoBragg_spots()
+                panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel().copy())
             spots = np.concatenate(panel_pixels)
             img_sh = (spots.size,)
         else:
@@ -304,12 +303,8 @@ class Simulator:
                     for pid in range(n_panels):
                         S.panel_id = pid
                         S.D.Amatrix = new_Amat
-                        S.D.device_Id = dev
-                        if self.cuda:
-                            S.D.add_nanoBragg_spots_cuda()
-                        else:
-                            S.D.add_nanoBragg_spots()
-                        extra_panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel())
+                        S.D.add_nanoBragg_spots()  # CPU only for multi-panel
+                        extra_panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel().copy())
                     this_latt_spots = np.concatenate(extra_panel_pixels)
                 else:
                     S.D.Amatrix = new_Amat
