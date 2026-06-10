@@ -503,45 +503,46 @@ class Simulator:
         return nominal_data
 
     def sim_background_multipanel(self, det, beam, dev, stol_name, redo_air_water=False):
-        """Like sim_background but loops over all panels for correct per-panel geometry.
+        """Compute background for all panels in a single GPU call.
+
+        add_background (simulation.cu) already loops over gdt.cu_n_panels internally,
+        so one call with a full multi-panel gpu_det covers all panels at once.
+        get_raw_pixels() returns shape (n_panels, slow, fast) with no panel-count
+        restriction — unlike write_raw_pixels() which asserts cu_n_panels==1.
 
         Returns a flat 1D numpy array of background pixels for all panels concatenated
         in panel order (matching _pixel_offsets from geom_parser).
         """
         spectrum = [(beam.get_wavelength(), 1)]
         xray_beams = get_xray_beams(spectrum, beam)
-        panel_bgs = []
-        for pid in range(len(det)):
-            SIM = nanoBragg(det, beam, panel_id=pid)
-            SIM.beamsize_mm = paths_and_const.BEAM_SIZE_MM
-            SIM.xray_beams = xray_beams
-            SIM.flux = paths_and_const.FLUX
-            SIM.Fbg_vs_stol = make_sims.load_stol(stol_name)
-            SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
-            SIM.amorphous_density_gcm3 = 1
-            SIM.amorphous_molecular_weight_Da = 12
-            # gpud(nanoBragg=SIM) gives cu_n_panels=1 — avoids detector.cu:195 assert.
-            # get_raw_pixels() has no panel-count restriction; write_raw_pixels() does.
-            gpu_sim = self.exascale_api(nanoBragg=SIM)
-            gpu_sim.allocate()
-            gpu_det = self.gpud(deviceId=dev, nanoBragg=SIM)
-            gpu_det.each_image_allocate()
-            gpu_det.scale_in_place(0)
-            gpu_sim.add_background(gpu_det)
-            if redo_air_water:
-                for mw, thick, density, stol_f in [
-                    (14, 5, 1.2e-3, paths_and_const.AIR_STOL),
-                    (18, paths_and_const.XTALSIZE_MM, 1, paths_and_const.WATER_STOL),
-                ]:
-                    SIM.Fbg_vs_stol = make_sims.load_stol(stol_f)
-                    SIM.amorphous_sample_thick_mm = thick
-                    SIM.amorphous_density_gcm3 = density
-                    SIM.amorphous_molecular_weight_Da = mw
-                    gpu_sim.add_background(gpu_det)
-            panel_bgs.append(gpu_det.get_raw_pixels().as_numpy_array().ravel())
-            gpu_det.each_image_free()
-            del gpu_det, gpu_sim, SIM
-        return np.concatenate(panel_bgs)
+        SIM = nanoBragg(det, beam, panel_id=0)
+        SIM.beamsize_mm = paths_and_const.BEAM_SIZE_MM
+        SIM.xray_beams = xray_beams
+        SIM.flux = paths_and_const.FLUX
+        SIM.Fbg_vs_stol = make_sims.load_stol(stol_name)
+        SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
+        SIM.amorphous_density_gcm3 = 1
+        SIM.amorphous_molecular_weight_Da = 12
+        gpu_sim = self.exascale_api(nanoBragg=SIM)
+        gpu_sim.allocate()
+        gpu_det = self.gpud(deviceId=dev, detector=det, beam=beam)
+        gpu_det.each_image_allocate()
+        gpu_det.scale_in_place(0)
+        gpu_sim.add_background(gpu_det)
+        if redo_air_water:
+            for mw, thick, density, stol_f in [
+                (14, 5, 1.2e-3, paths_and_const.AIR_STOL),
+                (18, paths_and_const.XTALSIZE_MM, 1, paths_and_const.WATER_STOL),
+            ]:
+                SIM.Fbg_vs_stol = make_sims.load_stol(stol_f)
+                SIM.amorphous_sample_thick_mm = thick
+                SIM.amorphous_density_gcm3 = density
+                SIM.amorphous_molecular_weight_Da = mw
+                gpu_sim.add_background(gpu_det)
+        all_px = gpu_det.get_raw_pixels().as_numpy_array()  # shape (n_panels, slow, fast)
+        gpu_det.each_image_free()
+        del gpu_det, gpu_sim, SIM
+        return np.concatenate([all_px[pid].ravel() for pid in range(len(det))])
 
 
 def reso2radius(reso, DET, BEAM):
