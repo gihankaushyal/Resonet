@@ -2,11 +2,11 @@
 #SBATCH --job-name=cxi_char
 #SBATCH -p general
 #SBATCH -q grp_cxfel
-#SBATCH --gres=gpu:4                 # 4 H100s; ranks 0-9 cycle via rank % 4
-#SBATCH -n 10                        # 10 ranks x 1000 shots = 10k total
-#SBATCH -c 6                         # 6 CPUs/rank = 60 CPUs total
-#SBATCH --mem=600G                   # 60 GB/rank headroom
-#SBATCH --time=04:00:00              # ~10 sec/shot x 1000 shots ~ 2.8 hr; 4 hr wall
+#SBATCH --gres=gpu:1                 # 1 H100; all ranks share GPU 0 (matches cxi_100 working config)
+#SBATCH -n 5                         # 5 ranks x 200 shots = 1k total
+#SBATCH -c 12                        # 12 CPUs/rank = 60 CPUs total
+#SBATCH --mem=600G                   # 120 GB/rank headroom
+#SBATCH --time=01:00:00              # ~10 sec/shot x 200 shots ~ 30 min; 1 hr wall
 #SBATCH --nodelist=scg020
 #SBATCH --output=cxi_char_%j.log
 
@@ -20,11 +20,11 @@ source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 
 srun --export=ALL resonet-simulate cxi_char \
-    --nshot 10000 \
+    --nshot 1000 \
     --outfmt cxi \
     --geomfile /data/bioxfel/user/gihan/Resonet/geoms/Eigar.geom \
     --detector-name "EIGER 4M" \
-    --ngpu=4 \
+    --ngpu=1 \
     --randDist --randDistRange 100 300 \
     --randHits \
     --randWave \
