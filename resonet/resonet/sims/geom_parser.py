@@ -94,10 +94,10 @@ def parse_geom(path: str) -> tuple:
 
         # CrystFEL origin: pixels from beam center; dxtbx origin: mm from lab origin.
         # CrystFEL z is +downstream; dxtbx z is +upstream (beam travels in -z).
-        # So dxtbx origin z = -clen_mm. x/y signs are the same in both conventions.
+        # CrystFEL +y is upward; dxtbx +y is downward — so corner_y must be negated.
         origin_mm = (
             p['corner_x'] * pixel_size_mm,
-            p['corner_y'] * pixel_size_mm,
+            -p['corner_y'] * pixel_size_mm,
             -clen * 1000.0,
         )
         n_fast = int(p['max_fs'] - p['min_fs'] + 1)
