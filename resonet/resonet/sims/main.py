@@ -60,6 +60,15 @@ def args(use_joblib=False):
     parser.add_argument("--totalRanks", default=None, type=int,
                         help="Total number of ranks in the full job (for shot splitting and seed generation). "
                              "Defaults to COMM.size if not specified.")
+    parser.add_argument(
+        "--outfmt", type=str, default="hdf5", choices=["hdf5", "cxi"],
+        help="Output format: hdf5 (default, 512x512) or cxi (full unassembled)")
+    parser.add_argument(
+        "--geomfile", type=str, default=None,
+        help="Path to CrystFEL .geom file (required when --outfmt cxi)")
+    parser.add_argument(
+        "--detector-name", dest="detector_name", type=str, default=None,
+        help="Detector description string written to CXI metadata (e.g. 'EIGER 4M'); required when --outfmt cxi")
     if use_joblib:
         parser.add_argument("--njobs", default=None, type=int, help="number of jobs")
     args = parser.parse_args()
@@ -125,42 +134,82 @@ def run(args, seeds, jid, njobs, gvec=None):
         if jid==0:
             print("Found %d maskfiles" %len(maskfiles))
 
-    # load the geometry from provided image file
-    if args.geom is None:
-        from resonet.sims.mosflm_geom import DET,BEAM
-        xdim, ydim = DET[0].get_image_size()
-        mask = np.ones((ydim, xdim), bool)
+    _outfmt_cxi = getattr(args, 'outfmt', 'hdf5') == 'cxi'
+    if _outfmt_cxi:
+        for _ignored_arg, _flag in [
+            (getattr(args, 'beamStop', None), '--beamStop'),
+            (getattr(args, 'noHot', False), '--noHot'),
+            (getattr(args, 'noBad', False), '--noBad'),
+        ]:
+            if _ignored_arg:
+                print(f"WARNING: {_flag} is ignored in --outfmt cxi mode", flush=True)
+        if args.geomfile is None:
+            raise ValueError("--geomfile is required when --outfmt cxi")
+        if args.detector_name is None:
+            raise ValueError("--detector-name is required when --outfmt cxi")
+        if not os.path.exists(args.geomfile):
+            raise FileNotFoundError(f"Geom file not found: {args.geomfile}")
+        from resonet.sims.geom_parser import parse_geom
+        from resonet.sims.cxi_writer import CXIWriter
+        _geom_det, _panel_map, _geom_globals = parse_geom(args.geomfile)
+        DET = _geom_det
+        _n_ss = max(pm['max_ss'] for pm in _panel_map) + 1
+        _n_fs = max(pm['max_fs'] for pm in _panel_map) + 1
+        xdim, ydim = _n_fs, _n_ss
+        mask = np.ones((_n_ss, _n_fs), bool)
+        pixsize = 1000.0 / _geom_globals['res']
+        _pixel_offsets = []
+        _offset = 0
+        for pm in _panel_map:
+            _pixel_offsets.append(_offset)
+            _offset += pm['n_fast'] * pm['n_slow']
+        _wavelength_m = 1239.84193e-9 / _geom_globals['photon_energy']
+        _cxi_meta = {
+            'detector_name': args.detector_name,
+            'distance_m': _geom_globals['clen'],
+            'pixel_size_m': 1.0 / _geom_globals['res'],
+            'photon_energy_eV': _geom_globals['photon_energy'],
+            'wavelength_m': _wavelength_m,
+        }
+        from dxtbx.model import BeamFactory
+        BEAM = BeamFactory.simple(wavelength=12398.4 / _geom_globals['photon_energy'])
     else:
-        geom_dirname=os.path.join(os.path.dirname(__file__))
-        if args.geom == "pilatus":
-            geom_f = os.path.join(geom_dirname, "pilatus_1_00001.cbf")
-        elif args.geom == "eiger":
-            geom_f = os.path.join(geom_dirname, "eiger_1_00001.cbf")
+        # load the geometry from provided image file
+        if args.geom is None:
+            from resonet.sims.mosflm_geom import DET,BEAM
+            xdim, ydim = DET[0].get_image_size()
+            mask = np.ones((ydim, xdim), bool)
         else:
-            geom_f = os.path.join(geom_dirname, "rayonix_1_00001.cbf")
+            geom_dirname=os.path.join(os.path.dirname(__file__))
+            if args.geom == "pilatus":
+                geom_f = os.path.join(geom_dirname, "pilatus_1_00001.cbf")
+            elif args.geom == "eiger":
+                geom_f = os.path.join(geom_dirname, "eiger_1_00001.cbf")
+            else:
+                geom_f = os.path.join(geom_dirname, "rayonix_1_00001.cbf")
 
-        if not os.path.exists(geom_f):
-            raise OSError(f"Geometry file {geom_f} does not exist, try running `resonet-getsimdata`.")
-        loader = dxtbx.load(geom_f)
-        DET = loader.get_detector()
-        BEAM = loader.get_beam()
-        if args.expt is not None:
-            from dxtbx.model import ExperimentList
-            El = ExperimentList.from_file(args.expt, False)
-            DET = El[0].detector
-            BEAM = El[0].beam
+            if not os.path.exists(geom_f):
+                raise OSError(f"Geometry file {geom_f} does not exist, try running `resonet-getsimdata`.")
+            loader = dxtbx.load(geom_f)
+            DET = loader.get_detector()
+            BEAM = loader.get_beam()
+            if args.expt is not None:
+                from dxtbx.model import ExperimentList
+                El = ExperimentList.from_file(args.expt, False)
+                DET = El[0].detector
+                BEAM = El[0].beam
 
-        # remove the sensor thickness portion of the geometry
-        DET = utils.set_detector_thickness(DET)
+            # remove the sensor thickness portion of the geometry
+            DET = utils.set_detector_thickness(DET)
 
-        # get the detector dimensions (used to determine detector model below)
-        xdim,ydim = DET[0].get_image_size()
-        # which pixel do not contain data
-        mask = loader.get_raw_data().as_numpy_array() >= 0
-        mask = ~binary_dilation(~mask, iterations=2)
-        if args.mask is not None:
-            mask = np.load(args.mask)
-            assert len(mask.shape) == 2
+            # get the detector dimensions (used to determine detector model below)
+            xdim,ydim = DET[0].get_image_size()
+            # which pixel do not contain data
+            mask = loader.get_raw_data().as_numpy_array() >= 0
+            mask = ~binary_dilation(~mask, iterations=2)
+            if args.mask is not None:
+                mask = np.load(args.mask)
+                assert len(mask.shape) == 2
 
     geom_dict = {"detector":DET, "beam":BEAM}
 
@@ -197,7 +246,8 @@ def run(args, seeds, jid, njobs, gvec=None):
     HS.bg_only = args.bgOnly
     HS.xtal_shape = args.xtalShape
     HS.shots_per_example = args.shotsPerEx
-    pixsize = DET[0].get_pixel_size()[0]
+    if not _outfmt_cxi:
+        pixsize = DET[0].get_pixel_size()[0]
 
     # GPU device Id for this rank
     dev = jid % args.ngpu
@@ -209,7 +259,10 @@ def run(args, seeds, jid, njobs, gvec=None):
     prefix = "compressed"
     if args.noCompress:
         prefix = "rank"
-    outname = os.path.join(args.outdir, "%s%d.h5" %(prefix,jid))
+    if _outfmt_cxi:
+        outname = os.path.join(args.outdir, "%s%d.cxi" % (prefix, jid))
+    else:
+        outname = os.path.join(args.outdir, "%s%d.h5" %(prefix,jid))
     if jid==0:
         cmd = os.path.join(args.outdir, "commandline.txt")
         config = open(paths_and_const.__file__, 'r').read()
@@ -218,323 +271,423 @@ def run(args, seeds, jid, njobs, gvec=None):
             o.write("Python command: " + " ".join(sys.argv) + "\n")
             o.write("\nConfiguration (paths_and_const.py):\n%s" % config)
 
-    with h5py.File(outname, "w") as out:
-        out.create_dataset("nominal_mask", data=mask)
-        ds_shape = 512,512
-        if args.centerCrop:
-            ds_shape = cropdim, cropdim
-        comp_args = {"dtype": np.float32}
-
-        if not args.noCompress:
-            comp_args["compression_opts"] = 4
-            comp_args["compression"] = "gzip"
-            comp_args["shuffle"] = True
-            comp_args["dtype"] = np.uint16
-        dset_shape = (Nshot,) + ds_shape
-        chunks = (1,)+ds_shape
-        if args.shotsPerEx > 1:
-            dset_shape = (Nshot, args.shotsPerEx) + ds_shape
-            chunks = (1, args.shotsPerEx)+ds_shape
-        dset = out.create_dataset("images",
-                                  shape=dset_shape,
-                                  chunks=chunks,
-                                  **comp_args)
-
-        comp_args.pop("dtype")
-        cbf_names = []
-
-        param_names = ["reso", "one_over_reso",
-                       "radius", "one_over_radius",
-                       "is_multi", "multi_lat_angle_sigma",
-                       "num_lat", "bg_scale",
-                       "beamstop_rad", "detdist", "wavelen",
-                       "beam_center_fast", "beam_center_slow",
-                       "cent_fast_train", "cent_slow_train",
-                       "Na", "Nb", "Nc", "pdb", "mos_spread","xtal_scale"] \
-                      + ["r%d" % x for x in range(1, 10)] + ['pitch_deg', 'yaw_deg', "bg_only"]
-        geom_names = ["detdist", "wavelen", "pixsize", "xdim", "ydim"]
-        lab_dset = out.create_dataset("labels", dtype=np.float32, shape=(Nshot, len(param_names)) , **comp_args)
-        geom_dset = out.create_dataset("geom", dtype=np.float32, shape=(Nshot, len(geom_names)), **comp_args)
-        lab_dset.attrs["names"] = param_names
-        lab_dset.attrs["pdbmap"] = list(PDB_MAP)
-        geom_dset.attrs["names"] = geom_names
-
-        # list of rotation matrices (length is Nshot)
-        if args.randAxis:
-            assert gvec is not None
-            angle= np.random.uniform(-180,180,Nshot)
-            rot_vecs = np.array([gvec / np.linalg.norm(gvec)]*Nshot)
-            rot_vecs *= angle[:,None]
-            rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
-        elif args.axisRotOnly is not None:
-            angle = np.random.uniform(-180,180,Nshot)
-            rot_vecs = np.zeros((Nshot, 3))
-            rot_vecs[:,args.axisRotOnly] = angle
-            rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
-        elif args.twoAxisOnly is not None:
-            angle = np.random.uniform(-180,180, Nshot)
-            gvecs = np.random.normal(0,1,(Nshot, 2))
-            uvecs = gvecs / np.linalg.norm(gvecs, axis=1)[:,None]
-            #rot_vecs = uvecs*angle
-            rot_vecs = np.zeros((Nshot, 3))
-            if args.twoAxisOnly==0: # "xy"
-                rot_vecs[:,[0,1]] = uvecs
-            elif args.twoAxisOnly==1: # xz
-                rot_vecs[:,[0,2]] = uvecs
-            else:  # yz
-                rot_vecs[:,[1,2]] = uvecs
-            rot_vecs *= angle[:,None]
-            rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
-        else:
-            rotMats = Rotation.random(Nshot).as_matrix()
-        times = []  # store processing times per shot
-
-        # random generators
-        random_dist = random_wave = None
-        if args.randDist:
-            if args.randDistChoice is not None:
-                random_dist = lambda: np.random.choice(args.randDistChoice)
-            else:
-                d1,d2 = args.randDistRange
-                assert d1 < d2
-                random_dist = lambda: np.random.uniform(d1,d2)
-        if args.randWave:
-            en1, en2 = args.randWaveRange
-            assert en1 < en2
-            random_wave = lambda: np.random.uniform(en1, en2)
-
-        for i_shot in range(Nshot):
-            t = time.time()
-            cbf_name = None
-            if args.saveRaw:
-                cbf_dir = os.path.join(args.outdir, "cbfs%d" % jid)
-                if not os.path.exists(cbf_dir):
-                    os.makedirs(cbf_dir)
-                cbf_name = os.path.join(cbf_dir, "shot_1_%05d.cbf" % i_shot)
-                cbf_names.append(os.path.abspath(cbf_name))
-
-            pdb_name = args.pdbName
-            if pdb_name is not None:
-                pdb_name = pdb_name.replace("//","/")
-
-            # load a mask for this shot
-            if maskfiles:
-                # choose a random mask for this shot
-                maskname = np.random.choice(maskfiles)
-                shot_mask = np.load(maskname)
-                if jid == 0:
-                    print("Loading mask %s" % maskname)
-            else:
-                shot_mask = mask.copy()
-            # add optional beamstop mask:
-            beamstop_rad=-1
-            if args.beamStop:
-                # assume beamstop can vary in radius from 0 to 15 mm
-                beamstop_rad_mm = np.random.choice(np.arange(0,15.1,0.375))
-                beamstop_rad = int(beamstop_rad_mm/pixsize)
-
-                # jitter the beamstop center by 0.5 mm
-                bs_jitt = .5/pixsize
-                bs_cent_x = np.random.uniform(cent_x-bs_jitt, cent_x+bs_jitt)
-                bs_cent_y = np.random.uniform(cent_y-bs_jitt, cent_y+bs_jitt)
-                pixR = np.sqrt((X - bs_cent_x) ** 2 + (Y - bs_cent_y) ** 2)
-                is_in_beamstop = pixR < beamstop_rad
-                if args.verbose:
-                    print("beamstop rad=%.1f" % beamstop_rad)
-                shot_mask = np.logical_and(shot_mask, ~is_in_beamstop)
-
-            HS.mask = shot_mask
-            if not args.bgOnly and args.randHits:
-                HS.bg_only = np.random.choice([0,1])
-
-            params, spots, imgs, shot_det, shot_beam = HS.simulate(rot_mat=rotMats[i_shot],
-                                      multi_lattice_chance=args.multiChance,
-                                      mos_min_max=args.mosMinMax,
-                                      max_lat=args.maxLat,
-                                      dev=dev, mos_dom_override=args.nmos,
-                                      vary_background_scale=args.varyBgScale,
-                                      pdb_name=pdb_name,
-                                      randomize_dist=random_dist,
-                                      randomize_center=args.randCent,
-                                      randomize_wavelen=random_wave,
-                                      randomize_scale=args.randScale,
-                                      low_bg_chance=args.lowBgChance,
-                                      uniform_reso=args.uniReso,
-                                      cbf_name=cbf_name)
-
-            if args.sanityTestOps:
-                assert args.shotsPerEx == 1
-                pdb_name = params['pdb_name']
-                pdb_id = os.path.basename(pdb_name)
-                OPS = np.load(paths_and_const.SGOP_FILE, allow_pickle=True)[()][pdb_id]
-                print(pdb_id)
-                assert paths_and_const.FIX_RES
-
-                for i_op, U_o in enumerate(OPS):
-                    rot2 = np.dot(rotMats[i_shot], np.reshape(U_o, (3,3)))
-                    print("Doing op %d / %d" %(i_op+1, len(OPS)))
-                    print(U_o)
-                    params2, spots2, imgs2, _, _ = HS.simulate(rot_mat=rot2,
-                                                     multi_lattice_chance=args.multiChance,
-                                                     mos_min_max=args.mosMinMax,
-                                                     max_lat=args.maxLat,
-                                                     dev=dev, mos_dom_override=args.nmos,
-                                                     vary_background_scale=args.varyBgScale,
-                                                     pdb_name=pdb_name,
-                                                     randomize_dist=random_dist,
-                                                     randomize_center=args.randCent,
-                                                     randomize_wavelen=random_wave,
-                                                     randomize_scale=args.randScale,
-                                                     low_bg_chance=args.lowBgChance,
-                                                     uniform_reso=args.uniReso)
-                    if not np.allclose(spots, spots2):
-                        assert args.centerCrop  # we only care about this allclose test if center crop is true (orientation mode)
-                        max_pool = counter_utils.mx_gamma(stride=center_ds_fact, dim=cropdim)
-                        ds_spots = []
-                        assert len(spots)==len(spots2)==1
-                        for sp_img in [spots, spots2]:
-                            ds_sp = counter_utils.process_image(sp_img[0], max_pool, useSqrt=True)[0]
-                            IMAX = np.sqrt(65535)
-                            ds_sp[ds_sp > IMAX] = IMAX
-                            ds_sp = ds_sp.numpy().astype(np.uint16)
-                            ds_spots.append(ds_sp)
-                        assert np.allclose(ds_spots[0], ds_spots[1])
-                exit()
-
-            # at what pixel radius does this resolution corresond to
-            radius = reso2radius(params["reso"], DET, BEAM)
-
-            cent_x, cent_y = params["beam_center"]
-
-            # add hot pixels
-            npix = imgs[0].size
-            if not args.noHot:
-                nhot = np.random.randint(0, 6)
-                hot_inds = np.random.permutation(npix)[:nhot]
-
-                for i_img, img in enumerate(imgs):
-                    img_1d = img.ravel()
-                    img_1d[hot_inds] = 2**16
-                    img = img_1d.reshape(img.shape)
-                    img *= shot_mask
-                    imgs[i_img] = img
-
-            # add bad pixels
-            if args.noBad:
-                min_npix = int(0.01 * xdim)
-                max_npix = 3*min_npix
-                nbad = np.random.randint(min_npix, max_npix)
-                bad_inds = np.random.permutation(npix)[:nbad]
-
-                for i_img, img in enumerate(imgs):
-                    img_1d = img.ravel()
-                    img_1d[bad_inds] = 0
-                    img = img_1d.reshape(img.shape)
-                    img *= shot_mask
-                    imgs[i_img] = img
-
-            if paths_and_const.LAUE_MODE:
-                ave_pool = counter_utils.mx_gamma(stride=center_ds_fact, use_mean=True)
-                #ds_wavelen = counter_utils.process_image(params['wavelen_data'],
-                #                                         ave_pool, useSqrt=False)[0]
-
-            # Rules for downsampling
-            if args.centerCrop:
-                max_pool = counter_utils.mx_gamma(stride=center_ds_fact, dim=cropdim)
-                dx = xdim *.5 / center_ds_fact - cropdim*.5
-                dy = ydim *.5 / center_ds_fact - cropdim*.5
-                # convert cent_x, cent_y to downsampled version
-                cent_x_train = cent_x / center_ds_fact - dx
-                cent_y_train = cent_y / center_ds_fact - dy
-            else:
-                max_pool = torch.nn.MaxPool2d(quad_ds_fact, quad_ds_fact)
-                q = np.random.choice(["A", "B", "C", "D"])
-                # convert cent_x, cent_y to downsampled version
-                # TODO update cent_x_train, cent_y_train
-                cent_x_train = (cent_x - xdim*.5)/quad_ds_fact #factor
-                cent_y_train = (cent_y - ydim*.5)/quad_ds_fact #factor
-
-            ds_imgs = []
-            for i_img, img in enumerate(imgs):
-
-                if paths_and_const.PEAK_MODE:
-                    spots_i = spots[i_img]
-                    img = spots_i > np.percentile(spots_i,99.99)
-
-                if args.centerCrop:
-                    ds_img = counter_utils.process_image(img, max_pool, useSqrt=True)[0]
+    if _outfmt_cxi:
+        _cxi_writer = CXIWriter(outname, (_n_ss, _n_fs), _cxi_meta)
+        try:
+            if args.randAxis:
+                assert gvec is not None
+                angle = np.random.uniform(-180, 180, Nshot)
+                rot_vecs = np.array([gvec / np.linalg.norm(gvec)] * Nshot)
+                rot_vecs *= angle[:, None]
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            elif args.axisRotOnly is not None:
+                angle = np.random.uniform(-180, 180, Nshot)
+                rot_vecs = np.zeros((Nshot, 3))
+                rot_vecs[:, args.axisRotOnly] = angle
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            elif args.twoAxisOnly is not None:
+                angle = np.random.uniform(-180, 180, Nshot)
+                gvecs = np.random.normal(0, 1, (Nshot, 2))
+                uvecs = gvecs / np.linalg.norm(gvecs, axis=1)[:, None]
+                rot_vecs = np.zeros((Nshot, 3))
+                if args.twoAxisOnly == 0:
+                    rot_vecs[:, [0, 1]] = uvecs
+                elif args.twoAxisOnly == 1:
+                    rot_vecs[:, [0, 2]] = uvecs
                 else:
-                    ds_img = to_tens(img, shot_mask, maxpool=max_pool, ds_fact=quad_ds_fact, quad=q)
-
-                ds_imgs.append(ds_img)
-
-            Na, Nb, Nc = params["Ncells_abc"]
-            #r1,r2,r3,r4,r5,r6,r7,r8,r9 = params["Umat"]
-            r1,r2,r3,r4,r5,r6,r7,r8,r9 = rotMats[i_shot].ravel()
-            if HS.bg_only:
-                r1=r2=r3=r4=r5=r6=r7=r8=r9=np.nan
-                params["num_lat"] = 0
-                params["reso"] = np.nan
-                radius = np.nan
-                params["multi_lattice"] = 0
-                params["ang_sigma"] = np.nan
-                Na = Nb = Nc = np.nan
-                pdb = np.nan
-                params["mos_spread"]=np.nan
-                params["crystal_scale"]=np.nan
+                    rot_vecs[:, [1, 2]] = uvecs
+                rot_vecs *= angle[:, None]
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
             else:
-                pdb = PDB_MAP[params["pdb_name"]]
-            param_arr = [params["reso"], 1/params["reso"],
-                 radius/quad_ds_fact, quad_ds_fact/radius, # TODO update depending on args.centerCrop?
-                 params["multi_lattice"],
-                 params["ang_sigma"],
-                 params["num_lat"],
-                 params["bg_scale"],
-                 beamstop_rad,
-                 params["detector_distance"],
-                 params["wavelength"],
-                 cent_x, cent_y,
-                 cent_x_train, cent_y_train,
-                 Na, Nb, Nc, 
-                 pdb,
-                 params["mos_spread"],
-                 params["crystal_scale"],
-                 r1,r2,r3,r4,r5,r6,r7,r8,r9,
-                 params['pitch_deg'], params['yaw_deg'],
-                 1 if HS.bg_only else 0]
-
-            geom_array = [params["detector_distance"],
-                             params["wavelength"],
-                             pixsize,
-                             xdim, ydim]
+                rotMats = Rotation.random(Nshot).as_matrix()
+            random_dist = random_wave = None
+            if args.randDist:
+                if args.randDistChoice is not None:
+                    random_dist = lambda: np.random.choice(args.randDistChoice)
+                else:
+                    d1, d2 = args.randDistRange
+                    assert d1 < d2
+                    random_dist = lambda: np.random.uniform(d1, d2)
+            if args.randWave:
+                en1, en2 = args.randWaveRange
+                assert en1 < en2
+                random_wave = lambda: np.random.uniform(en1, en2)
+            times = []
+            for i_shot in range(Nshot):
+                t = time.time()
+                pdb_name = args.pdbName
+                if pdb_name is not None:
+                    pdb_name = pdb_name.replace("//", "/")
+                HS.mask = mask
+                if not args.bgOnly and args.randHits:
+                    HS.bg_only = np.random.choice([0, 1])
+                params, spots, imgs, shot_det, shot_beam = HS.simulate(
+                    rot_mat=rotMats[i_shot],
+                    multi_lattice_chance=args.multiChance,
+                    mos_min_max=args.mosMinMax,
+                    max_lat=args.maxLat,
+                    dev=dev,
+                    mos_dom_override=args.nmos,
+                    vary_background_scale=args.varyBgScale,
+                    pdb_name=pdb_name,
+                    randomize_dist=random_dist,
+                    randomize_center=args.randCent,
+                    randomize_wavelen=random_wave,
+                    randomize_scale=args.randScale,
+                    low_bg_chance=args.lowBgChance,
+                    uniform_reso=args.uniReso,
+                    multi_panel=True,
+                )
+                n_px_expected = sum(pm['n_fast'] * pm['n_slow'] for pm in _panel_map)
+                shot_labels = {
+                    'hit': float(0 if HS.bg_only else 1),
+                    'detector_distance': float(params['detector_distance']),
+                    'wavelength': float(params['wavelength']),
+                }
+                for flat_img in imgs:
+                    assert flat_img.size == n_px_expected, (
+                        f"flat_img size {flat_img.size} != expected {n_px_expected} panel pixels"
+                    )
+                    unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
+                    for pm, pix_off in zip(_panel_map, _pixel_offsets):
+                        n_px = pm['n_fast'] * pm['n_slow']
+                        panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                            pm['n_slow'], pm['n_fast']
+                        )
+                        unassembled[
+                            pm['min_ss']:pm['max_ss'] + 1,
+                            pm['min_fs']:pm['max_fs'] + 1
+                        ] = panel_data
+                    unassembled = np.clip(unassembled, 0, 65535).astype(np.uint16)
+                    _cxi_writer.add_frame(unassembled, labels=shot_labels)
+                t = time.time() - t
+                times.append(t)
+                print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} (took {t:.4f} sec).", flush=True)
+                gc.collect()
+                if _malloc_trim is not None:
+                    _malloc_trim(0)
+        finally:
+            _cxi_writer.close()
+        ave_t = np.mean(times)
+        print(f"RANK {jid+1}/{njobs}: Done! CXI output: {outname}. Avg {ave_t:.4f} sec/image.", flush=True)
+    else:
+        with h5py.File(outname, "w") as out:
+            out.create_dataset("nominal_mask", data=mask)
+            ds_shape = 512,512
+            if args.centerCrop:
+                ds_shape = cropdim, cropdim
+            comp_args = {"dtype": np.float32}
 
             if not args.noCompress:
-                IMAX=np.sqrt(65535)
-                for i_ds_img, ds_img in enumerate(ds_imgs):
-                    ds_img[ds_img > IMAX] = IMAX
-                    ds_img = ds_img.numpy().astype(np.uint16)
-                    ds_imgs[i_ds_img] = ds_img
+                comp_args["compression_opts"] = 4
+                comp_args["compression"] = "gzip"
+                comp_args["shuffle"] = True
+                comp_args["dtype"] = np.uint16
+            dset_shape = (Nshot,) + ds_shape
+            chunks = (1,)+ds_shape
+            if args.shotsPerEx > 1:
+                dset_shape = (Nshot, args.shotsPerEx) + ds_shape
+                chunks = (1, args.shotsPerEx)+ds_shape
+            dset = out.create_dataset("images",
+                                      shape=dset_shape,
+                                      chunks=chunks,
+                                      **comp_args)
 
-            if args.shotsPerEx == 1:
-                assert len(ds_imgs)==1
-                dset[i_shot] = ds_imgs[0]
+            comp_args.pop("dtype")
+            cbf_names = []
+
+            param_names = ["reso", "one_over_reso",
+                           "radius", "one_over_radius",
+                           "is_multi", "multi_lat_angle_sigma",
+                           "num_lat", "bg_scale",
+                           "beamstop_rad", "detdist", "wavelen",
+                           "beam_center_fast", "beam_center_slow",
+                           "cent_fast_train", "cent_slow_train",
+                           "Na", "Nb", "Nc", "pdb", "mos_spread","xtal_scale"] \
+                          + ["r%d" % x for x in range(1, 10)] + ['pitch_deg', 'yaw_deg', "bg_only"]
+            geom_names = ["detdist", "wavelen", "pixsize", "xdim", "ydim"]
+            lab_dset = out.create_dataset("labels", dtype=np.float32, shape=(Nshot, len(param_names)) , **comp_args)
+            geom_dset = out.create_dataset("geom", dtype=np.float32, shape=(Nshot, len(geom_names)), **comp_args)
+            lab_dset.attrs["names"] = param_names
+            lab_dset.attrs["pdbmap"] = list(PDB_MAP)
+            geom_dset.attrs["names"] = geom_names
+
+            # list of rotation matrices (length is Nshot)
+            if args.randAxis:
+                assert gvec is not None
+                angle= np.random.uniform(-180,180,Nshot)
+                rot_vecs = np.array([gvec / np.linalg.norm(gvec)]*Nshot)
+                rot_vecs *= angle[:,None]
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            elif args.axisRotOnly is not None:
+                angle = np.random.uniform(-180,180,Nshot)
+                rot_vecs = np.zeros((Nshot, 3))
+                rot_vecs[:,args.axisRotOnly] = angle
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            elif args.twoAxisOnly is not None:
+                angle = np.random.uniform(-180,180, Nshot)
+                gvecs = np.random.normal(0,1,(Nshot, 2))
+                uvecs = gvecs / np.linalg.norm(gvecs, axis=1)[:,None]
+                #rot_vecs = uvecs*angle
+                rot_vecs = np.zeros((Nshot, 3))
+                if args.twoAxisOnly==0: # "xy"
+                    rot_vecs[:,[0,1]] = uvecs
+                elif args.twoAxisOnly==1: # xz
+                    rot_vecs[:,[0,2]] = uvecs
+                else:  # yz
+                    rot_vecs[:,[1,2]] = uvecs
+                rot_vecs *= angle[:,None]
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
             else:
-                dset[i_shot] = ds_imgs
-            geom_dset[i_shot] = geom_array
-            lab_dset[i_shot] = param_arr
+                rotMats = Rotation.random(Nshot).as_matrix()
+            times = []  # store processing times per shot
 
-            t = time.time()-t
-            times.append(t)
-            print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} out of {args.nshot} total (took {t:.4f} sec).", flush=True)
-            gc.collect()
-            if _malloc_trim is not None:
-                _malloc_trim(0)
-            if i_shot % 10 == 0:
-                rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-                print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
+            # random generators
+            random_dist = random_wave = None
+            if args.randDist:
+                if args.randDistChoice is not None:
+                    random_dist = lambda: np.random.choice(args.randDistChoice)
+                else:
+                    d1,d2 = args.randDistRange
+                    assert d1 < d2
+                    random_dist = lambda: np.random.uniform(d1,d2)
+            if args.randWave:
+                en1, en2 = args.randWaveRange
+                assert en1 < en2
+                random_wave = lambda: np.random.uniform(en1, en2)
 
-        ave_t = np.mean(times)
-        print(f"RANK {jid+1}/{njobs}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)", flush=True)
+            for i_shot in range(Nshot):
+                t = time.time()
+                cbf_name = None
+                if args.saveRaw:
+                    cbf_dir = os.path.join(args.outdir, "cbfs%d" % jid)
+                    if not os.path.exists(cbf_dir):
+                        os.makedirs(cbf_dir)
+                    cbf_name = os.path.join(cbf_dir, "shot_1_%05d.cbf" % i_shot)
+                    cbf_names.append(os.path.abspath(cbf_name))
 
-        out.attrs["cbf_names"] = cbf_names
+                pdb_name = args.pdbName
+                if pdb_name is not None:
+                    pdb_name = pdb_name.replace("//","/")
+
+                # load a mask for this shot
+                if maskfiles:
+                    # choose a random mask for this shot
+                    maskname = np.random.choice(maskfiles)
+                    shot_mask = np.load(maskname)
+                    if jid == 0:
+                        print("Loading mask %s" % maskname)
+                else:
+                    shot_mask = mask.copy()
+                # add optional beamstop mask:
+                beamstop_rad=-1
+                if args.beamStop:
+                    # assume beamstop can vary in radius from 0 to 15 mm
+                    beamstop_rad_mm = np.random.choice(np.arange(0,15.1,0.375))
+                    beamstop_rad = int(beamstop_rad_mm/pixsize)
+
+                    # jitter the beamstop center by 0.5 mm
+                    bs_jitt = .5/pixsize
+                    bs_cent_x = np.random.uniform(cent_x-bs_jitt, cent_x+bs_jitt)
+                    bs_cent_y = np.random.uniform(cent_y-bs_jitt, cent_y+bs_jitt)
+                    pixR = np.sqrt((X - bs_cent_x) ** 2 + (Y - bs_cent_y) ** 2)
+                    is_in_beamstop = pixR < beamstop_rad
+                    if args.verbose:
+                        print("beamstop rad=%.1f" % beamstop_rad)
+                    shot_mask = np.logical_and(shot_mask, ~is_in_beamstop)
+
+                HS.mask = shot_mask
+                if not args.bgOnly and args.randHits:
+                    HS.bg_only = np.random.choice([0,1])
+
+                params, spots, imgs, shot_det, shot_beam = HS.simulate(rot_mat=rotMats[i_shot],
+                                          multi_lattice_chance=args.multiChance,
+                                          mos_min_max=args.mosMinMax,
+                                          max_lat=args.maxLat,
+                                          dev=dev, mos_dom_override=args.nmos,
+                                          vary_background_scale=args.varyBgScale,
+                                          pdb_name=pdb_name,
+                                          randomize_dist=random_dist,
+                                          randomize_center=args.randCent,
+                                          randomize_wavelen=random_wave,
+                                          randomize_scale=args.randScale,
+                                          low_bg_chance=args.lowBgChance,
+                                          uniform_reso=args.uniReso,
+                                          cbf_name=cbf_name)
+
+                if args.sanityTestOps:
+                    assert args.shotsPerEx == 1
+                    pdb_name = params['pdb_name']
+                    pdb_id = os.path.basename(pdb_name)
+                    OPS = np.load(paths_and_const.SGOP_FILE, allow_pickle=True)[()][pdb_id]
+                    print(pdb_id)
+                    assert paths_and_const.FIX_RES
+
+                    for i_op, U_o in enumerate(OPS):
+                        rot2 = np.dot(rotMats[i_shot], np.reshape(U_o, (3,3)))
+                        print("Doing op %d / %d" %(i_op+1, len(OPS)))
+                        print(U_o)
+                        params2, spots2, imgs2, _, _ = HS.simulate(rot_mat=rot2,
+                                                         multi_lattice_chance=args.multiChance,
+                                                         mos_min_max=args.mosMinMax,
+                                                         max_lat=args.maxLat,
+                                                         dev=dev, mos_dom_override=args.nmos,
+                                                         vary_background_scale=args.varyBgScale,
+                                                         pdb_name=pdb_name,
+                                                         randomize_dist=random_dist,
+                                                         randomize_center=args.randCent,
+                                                         randomize_wavelen=random_wave,
+                                                         randomize_scale=args.randScale,
+                                                         low_bg_chance=args.lowBgChance,
+                                                         uniform_reso=args.uniReso)
+                        if not np.allclose(spots, spots2):
+                            assert args.centerCrop  # we only care about this allclose test if center crop is true (orientation mode)
+                            max_pool = counter_utils.mx_gamma(stride=center_ds_fact, dim=cropdim)
+                            ds_spots = []
+                            assert len(spots)==len(spots2)==1
+                            for sp_img in [spots, spots2]:
+                                ds_sp = counter_utils.process_image(sp_img[0], max_pool, useSqrt=True)[0]
+                                IMAX = np.sqrt(65535)
+                                ds_sp[ds_sp > IMAX] = IMAX
+                                ds_sp = ds_sp.numpy().astype(np.uint16)
+                                ds_spots.append(ds_sp)
+                            assert np.allclose(ds_spots[0], ds_spots[1])
+                    exit()
+
+                # at what pixel radius does this resolution corresond to
+                radius = reso2radius(params["reso"], DET, BEAM)
+
+                cent_x, cent_y = params["beam_center"]
+
+                # add hot pixels
+                npix = imgs[0].size
+                if not args.noHot:
+                    nhot = np.random.randint(0, 6)
+                    hot_inds = np.random.permutation(npix)[:nhot]
+
+                    for i_img, img in enumerate(imgs):
+                        img_1d = img.ravel()
+                        img_1d[hot_inds] = 2**16
+                        img = img_1d.reshape(img.shape)
+                        img *= shot_mask
+                        imgs[i_img] = img
+
+                # add bad pixels
+                if args.noBad:
+                    min_npix = int(0.01 * xdim)
+                    max_npix = 3*min_npix
+                    nbad = np.random.randint(min_npix, max_npix)
+                    bad_inds = np.random.permutation(npix)[:nbad]
+
+                    for i_img, img in enumerate(imgs):
+                        img_1d = img.ravel()
+                        img_1d[bad_inds] = 0
+                        img = img_1d.reshape(img.shape)
+                        img *= shot_mask
+                        imgs[i_img] = img
+
+                if paths_and_const.LAUE_MODE:
+                    ave_pool = counter_utils.mx_gamma(stride=center_ds_fact, use_mean=True)
+                    #ds_wavelen = counter_utils.process_image(params['wavelen_data'],
+                    #                                         ave_pool, useSqrt=False)[0]
+
+                # Rules for downsampling
+                if args.centerCrop:
+                    max_pool = counter_utils.mx_gamma(stride=center_ds_fact, dim=cropdim)
+                    dx = xdim *.5 / center_ds_fact - cropdim*.5
+                    dy = ydim *.5 / center_ds_fact - cropdim*.5
+                    # convert cent_x, cent_y to downsampled version
+                    cent_x_train = cent_x / center_ds_fact - dx
+                    cent_y_train = cent_y / center_ds_fact - dy
+                else:
+                    max_pool = torch.nn.MaxPool2d(quad_ds_fact, quad_ds_fact)
+                    q = np.random.choice(["A", "B", "C", "D"])
+                    # convert cent_x, cent_y to downsampled version
+                    # TODO update cent_x_train, cent_y_train
+                    cent_x_train = (cent_x - xdim*.5)/quad_ds_fact #factor
+                    cent_y_train = (cent_y - ydim*.5)/quad_ds_fact #factor
+
+                ds_imgs = []
+                for i_img, img in enumerate(imgs):
+
+                    if paths_and_const.PEAK_MODE:
+                        spots_i = spots[i_img]
+                        img = spots_i > np.percentile(spots_i,99.99)
+
+                    if args.centerCrop:
+                        ds_img = counter_utils.process_image(img, max_pool, useSqrt=True)[0]
+                    else:
+                        ds_img = to_tens(img, shot_mask, maxpool=max_pool, ds_fact=quad_ds_fact, quad=q)
+
+                    ds_imgs.append(ds_img)
+
+                Na, Nb, Nc = params["Ncells_abc"]
+                #r1,r2,r3,r4,r5,r6,r7,r8,r9 = params["Umat"]
+                r1,r2,r3,r4,r5,r6,r7,r8,r9 = rotMats[i_shot].ravel()
+                if HS.bg_only:
+                    r1=r2=r3=r4=r5=r6=r7=r8=r9=np.nan
+                    params["num_lat"] = 0
+                    params["reso"] = np.nan
+                    radius = np.nan
+                    params["multi_lattice"] = 0
+                    params["ang_sigma"] = np.nan
+                    Na = Nb = Nc = np.nan
+                    pdb = np.nan
+                    params["mos_spread"]=np.nan
+                    params["crystal_scale"]=np.nan
+                else:
+                    pdb = PDB_MAP[params["pdb_name"]]
+                param_arr = [params["reso"], 1/params["reso"],
+                     radius/quad_ds_fact, quad_ds_fact/radius, # TODO update depending on args.centerCrop?
+                     params["multi_lattice"],
+                     params["ang_sigma"],
+                     params["num_lat"],
+                     params["bg_scale"],
+                     beamstop_rad,
+                     params["detector_distance"],
+                     params["wavelength"],
+                     cent_x, cent_y,
+                     cent_x_train, cent_y_train,
+                     Na, Nb, Nc,
+                     pdb,
+                     params["mos_spread"],
+                     params["crystal_scale"],
+                     r1,r2,r3,r4,r5,r6,r7,r8,r9,
+                     params['pitch_deg'], params['yaw_deg'],
+                     1 if HS.bg_only else 0]
+
+                geom_array = [params["detector_distance"],
+                                 params["wavelength"],
+                                 pixsize,
+                                 xdim, ydim]
+
+                if not args.noCompress:
+                    IMAX=np.sqrt(65535)
+                    for i_ds_img, ds_img in enumerate(ds_imgs):
+                        ds_img[ds_img > IMAX] = IMAX
+                        ds_img = ds_img.numpy().astype(np.uint16)
+                        ds_imgs[i_ds_img] = ds_img
+
+                if args.shotsPerEx == 1:
+                    assert len(ds_imgs)==1
+                    dset[i_shot] = ds_imgs[0]
+                else:
+                    dset[i_shot] = ds_imgs
+                geom_dset[i_shot] = geom_array
+                lab_dset[i_shot] = param_arr
+
+                t = time.time()-t
+                times.append(t)
+                print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} out of {args.nshot} total (took {t:.4f} sec).", flush=True)
+                gc.collect()
+                if _malloc_trim is not None:
+                    _malloc_trim(0)
+                if i_shot % 10 == 0:
+                    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                    print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
+
+            ave_t = np.mean(times)
+            print(f"RANK {jid+1}/{njobs}: Done! Takes {ave_t:.4f} sec on average per image. (Other processes might still be simulating)", flush=True)
+
+            out.attrs["cbf_names"] = cbf_names
 

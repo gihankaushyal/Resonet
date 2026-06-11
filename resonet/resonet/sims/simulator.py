@@ -32,6 +32,30 @@ class Simulator:
         # stol of every pixel:
         self.STOL = make_sims.get_theta_map(self.DET, self.BEAM)
 
+        # per-panel caches for multi-panel (CXI) simulation
+        if len(self.DET) > 1:
+            from simtbx.nanoBragg.utils import sim_background as _nb_sim_bg
+            self._all_stols = make_sims.get_theta_map(self.DET, self.BEAM, panel_id='all')
+            self._all_air_and_water = [
+                _nb_sim_bg(self.DET, self.BEAM,
+                           [self.BEAM.get_wavelength()], [1],
+                           paths_and_const.FLUX, pidx=pid,
+                           molecular_weight=14, sample_thick_mm=5,
+                           Fbg_vs_stol=make_sims.load_stol(paths_and_const.AIR_STOL),
+                           density_gcm3=1.2e-3).as_numpy_array()
+                + _nb_sim_bg(self.DET, self.BEAM,
+                             [self.BEAM.get_wavelength()], [1],
+                             paths_and_const.FLUX, pidx=pid,
+                             molecular_weight=18,
+                             sample_thick_mm=paths_and_const.XTALSIZE_MM,
+                             Fbg_vs_stol=make_sims.load_stol(paths_and_const.WATER_STOL),
+                             density_gcm3=1).as_numpy_array()
+                for pid in range(len(self.DET))
+            ]
+        else:
+            self._all_stols = [self.STOL]
+            self._all_air_and_water = [self.air_and_water]
+
         self.nb_beam = make_crystal.load_beam(self.BEAM,
                                       divergence=paths_and_const.DIVERGENCE_MRAD / 1e3 * 180 / np.pi)
         self.cuda=cuda
@@ -43,19 +67,22 @@ class Simulator:
         self.xtal_shape = "gauss"  # shape of the RELP, can be square, gauss, or gauss_star
         self.shots_per_example = 1  # if provided simulate will return multiple images, each with a different crystal orientation and noise
         self.mask = None  # place holder for numpy-style pixel mask
-        self.gpud = self.exascale_api = None
+        self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
                 self.gpud = get_exascale("gpu_detector", "cuda")
                 self.exascale_api = get_exascale("exascale_api", "cuda")
-            except ImportError:
-                print("Warning, simtbx_gpu_ext not installed, background simulation will be slow!")
+                self.gpu_channels_type = get_exascale("gpu_energy_channels", "cuda")
+            except ImportError as e:
+                self.gpud = self.exascale_api = self.gpu_channels_type = None
+                self.cuda = False
+                print(f"Warning: GPU unavailable ({e}); falling back to CPU background simulation.", flush=True)
 
     def simulate(self, rot_mat=None, multi_lattice_chance=0, max_lat=2, mos_min_max=None,
                  pdb_name=None, plastic_stol=None, dev=0, mos_dom_override=None, vary_background_scale=False,
                  randomize_dist=None, randomize_wavelen=None, randomize_center=False,
                  randomize_scale=False, low_bg_chance=0, uniform_reso=False, roi=None,
-                 old_multi_spread=True, cbf_name=None):
+                 old_multi_spread=True, cbf_name=None, multi_panel=False):
         """
 
         :param rot_mat: specific orientation matrix for crystal
@@ -78,6 +105,8 @@ class Simulator:
            This was the method used for the multi lattice model reported on in: https://doi.org/10.1107/S2059798323010586 
         :cbf_name: if provided, a raw CBF image will be written. It can be read with ADXV and dials.image_viewer
             but not the python package fabio (for reasons unknown)
+        :multi_panel: if True and the detector has more than 1 panel, keep raw_pixels as a flat 1D array
+            instead of reshaping to (ydim, xdim). CBF writing is also skipped in this mode.
         :return: parameters and simulated image
         """
         if multi_lattice_chance > 0:
@@ -150,20 +179,46 @@ class Simulator:
                 shot_det.rotate_around_origin(slow_axis,yaw_angle)
 
             if self.gpud is None:
-                shot_air_and_water = make_sims.get_background(shot_det, shot_beam, roi=roi)
+                if multi_panel and len(shot_det) > 1:
+                    from simtbx.nanoBragg.utils import sim_background as _nb_sim_bg
+                    shot_air_and_water = [
+                        _nb_sim_bg(shot_det, shot_beam,
+                                   [shot_beam.get_wavelength()], [1],
+                                   paths_and_const.FLUX, pidx=pid,
+                                   molecular_weight=14, sample_thick_mm=5,
+                                   Fbg_vs_stol=make_sims.load_stol(paths_and_const.AIR_STOL),
+                                   density_gcm3=1.2e-3, roi=roi).as_numpy_array()
+                        + _nb_sim_bg(shot_det, shot_beam,
+                                     [shot_beam.get_wavelength()], [1],
+                                     paths_and_const.FLUX, pidx=pid,
+                                     molecular_weight=18,
+                                     sample_thick_mm=paths_and_const.XTALSIZE_MM,
+                                     Fbg_vs_stol=make_sims.load_stol(paths_and_const.WATER_STOL),
+                                     density_gcm3=1, roi=roi).as_numpy_array()
+                        for pid in range(len(shot_det))
+                    ]
+                else:
+                    shot_air_and_water = make_sims.get_background(shot_det, shot_beam, roi=roi)
             redo_air_water = True
 
-            # stol of every pixel:
-            STOL = make_sims.get_theta_map(shot_det, shot_beam)
+            # stol of every pixel — per panel list when multi_panel
+            if multi_panel and len(shot_det) > 1:
+                STOL_list = make_sims.get_theta_map(shot_det, shot_beam, panel_id='all')
+            else:
+                STOL_list = [make_sims.get_theta_map(shot_det, shot_beam)]
 
             nb_beam = make_crystal.load_beam(shot_beam,
                                           divergence=paths_and_const.DIVERGENCE_MRAD / 1e3 * 180 / np.pi)
 
         else:
-            shot_air_and_water = None
+            if multi_panel and len(self.DET) > 1:
+                shot_air_and_water = self._all_air_and_water
+                STOL_list = self._all_stols
+            else:
+                shot_air_and_water = self.air_and_water
+                STOL_list = [self.STOL]
             redo_air_water = False
             air_and_water = self.air_and_water
-            STOL = self.STOL
             nb_beam = self.nb_beam
             shot_beam = self.BEAM
             shot_det = self.DET
@@ -189,15 +244,47 @@ class Simulator:
             print("Warning: Trying to use CUDA, but no simtbx CUDA install available.")
             self.cuda = False
 
-        if self.cuda:
-            S.D.device_Id = dev
-            S.D.add_nanoBragg_spots_cuda()
-        else:
-            S.D.add_nanoBragg_spots()
-        spots = S.D.raw_pixels.as_numpy_array()
         xdim, ydim = shot_det[0].get_image_size()
-        img_sh = ydim, xdim
-        spots = spots.reshape(img_sh)
+        do_multi_panel = multi_panel and len(shot_det) > 1
+        n_panels = len(shot_det)
+
+        if do_multi_panel and self.gpu_channels_type is not None:
+            # GPU path: add_energy_channel_from_gpu_amplitudes loops over gdt.cu_n_panels
+            # internally (simulation.cu:121), one kernel launch covers all panels.
+            fhkl_indices, fhkl_amps = S.D.Fhkl_tuple[:2]
+            gpu_channels = self.gpu_channels_type(deviceId=dev)
+            gpu_channels.structure_factors_to_GPU_direct(0, fhkl_indices, fhkl_amps)
+            gpu_sim = self.exascale_api(nanoBragg=S.D)
+            gpu_sim.allocate()
+            gpu_det = self.gpud(deviceId=dev, detector=shot_det, beam=shot_beam)
+            gpu_det.each_image_allocate()
+            try:
+                gpu_det.scale_in_place(0)
+                gpu_sim.add_energy_channel_from_gpu_amplitudes(0, gpu_channels, gpu_det)
+                all_px = gpu_det.get_raw_pixels().as_numpy_array()  # (n_panels, slow, fast)
+                spots = np.concatenate([all_px[pid].ravel() for pid in range(n_panels)])
+                img_sh = (spots.size,)
+            finally:
+                gpu_det.each_image_free()
+            del gpu_det, gpu_sim, gpu_channels
+        elif do_multi_panel:
+            # CPU fallback when GPU not available
+            panel_pixels = []
+            for pid in range(n_panels):
+                S.panel_id = pid
+                S.D.add_nanoBragg_spots()
+                panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel().copy())
+            spots = np.concatenate(panel_pixels)
+            img_sh = (spots.size,)
+        else:
+            if self.cuda:
+                S.D.device_Id = dev
+                S.D.add_nanoBragg_spots_cuda()
+            else:
+                S.D.add_nanoBragg_spots()
+            spots = S.D.raw_pixels.as_numpy_array()
+            img_sh = ydim, xdim
+            spots = spots.reshape(img_sh)
         use_multi = np.random.random() < multi_lattice_chance
         ang_sigma = 0
         num_additional_lat = 0
@@ -227,15 +314,24 @@ class Simulator:
                     print("additional multi lattice sim %d" % (i_p+1), flush=True)
                 Umat_p = np.dot(perturb, Umat)
                 nominal_crystal.set_U(tuple(Umat_p.ravel()))
-                S.D.Amatrix = sim_data.Amatrix_dials2nanoBragg(nominal_crystal)
+                new_Amat = sim_data.Amatrix_dials2nanoBragg(nominal_crystal)
 
-                S.D.raw_pixels *= 0
-                if self.cuda:
-                    S.D.add_nanoBragg_spots_cuda()
+                if do_multi_panel:
+                    extra_panel_pixels = []
+                    for pid in range(n_panels):
+                        S.panel_id = pid
+                        S.D.Amatrix = new_Amat
+                        S.D.add_nanoBragg_spots()  # CPU only for multi-panel
+                        extra_panel_pixels.append(S.D.raw_pixels.as_numpy_array().ravel().copy())
+                    this_latt_spots = np.concatenate(extra_panel_pixels)
                 else:
-                    S.D.add_nanoBragg_spots()
-
-                this_latt_spots = S.D.raw_pixels.as_numpy_array()
+                    S.D.Amatrix = new_Amat
+                    S.D.raw_pixels *= 0
+                    if self.cuda:
+                        S.D.add_nanoBragg_spots_cuda()
+                    else:
+                        S.D.add_nanoBragg_spots()
+                    this_latt_spots = S.D.raw_pixels.as_numpy_array()
                 if use_multi:
                     spots += this_latt_spots
                 else:
@@ -253,17 +349,41 @@ class Simulator:
         else:
             assert os.path.exists(plastic_stol)
 
-        if uniform_reso:
-            reso, Bfac_img = make_sims.get_Bfac_img(STOL,high_reso)
+        if do_multi_panel:
+            reso, Bfac_img = make_sims.get_Bfac_img_flat(
+                STOL_list, high_reso if uniform_reso else None)
         else:
-            reso, Bfac_img = make_sims.get_Bfac_img(STOL)
-        del STOL
+            hres = high_reso if uniform_reso else None
+            reso, Bfac_img = make_sims.get_Bfac_img(STOL_list[0], hres)
+        del STOL_list
 
         if self.gpud is None:
-            plastic = make_sims.random_bg(shot_det, shot_beam, plastic_stol, roi=roi)
-            bg = plastic + shot_air_and_water
+            if do_multi_panel:
+                from simtbx.nanoBragg.utils import sim_background as _nb_sim_bg
+                bg_panels = []
+                for pid in range(n_panels):
+                    plastic_pid = _nb_sim_bg(
+                        shot_det, shot_beam,
+                        [shot_beam.get_wavelength()], [1],
+                        paths_and_const.FLUX, pidx=pid,
+                        molecular_weight=12,
+                        sample_thick_mm=paths_and_const.XTALSIZE_MM,
+                        Fbg_vs_stol=make_sims.load_stol(plastic_stol),
+                        density_gcm3=1, roi=roi).as_numpy_array()
+                    aw = (shot_air_and_water[pid]
+                          if isinstance(shot_air_and_water, list)
+                          else shot_air_and_water)
+                    bg_panels.append(plastic_pid.ravel() + aw.ravel())
+                bg = np.concatenate(bg_panels)
+            else:
+                plastic = make_sims.random_bg(shot_det, shot_beam, plastic_stol, roi=roi)
+                bg = plastic + shot_air_and_water
         else:
-            bg = self.sim_background(shot_det, shot_beam, dev, plastic_stol, redo_air_water) 
+            if do_multi_panel:
+                bg = self.sim_background_multipanel(
+                    shot_det, shot_beam, dev, plastic_stol, redo_air_water)
+            else:
+                bg = self.sim_background(shot_det, shot_beam, dev, plastic_stol, redo_air_water)
 
         if paths_and_const.FLAT_BACKGROUND:
             bg = np.ones_like(bg)* np.mean(bg)
@@ -277,6 +397,8 @@ class Simulator:
             if self.verbose:
                 print("Scaling background by %.3f" % bg_scale)
 
+        if do_multi_panel:
+            S.panel_id = 0  # noise params are geometry-independent; reset for cleanliness
         make_sims.set_noise(S.D)
         noise_imgs = []
         all_spots_scaled = []
@@ -311,7 +433,7 @@ class Simulator:
                       "yaw_deg": yaw_angle*180/np.pi,
                       "wavelen_data": None}
 
-        if cbf_name:
+        if cbf_name and not (multi_panel and len(shot_det) > 1):
             raw_pix = deepcopy(S.D.raw_pixels)
             if self.mask is not None:
                 raw_pix = raw_pix.as_numpy_array().ravel()
@@ -357,46 +479,72 @@ class Simulator:
         gpu_simulation.allocate()
         gpu_detector = self.gpud(deviceId=dev, detector=det, beam=beam)
         gpu_detector.each_image_allocate()
-        #gpu_detector.setup_random_states()  # how long is this
-        #zeros = flex.double(np.zeros(spots_scaled.size))
-        #gpu_detector.set_raw_pixels(zeros)
-        gpu_detector.scale_in_place(0)
-
-        # add the plastic
-        gpu_simulation.add_background(gpu_detector)
-
-        if redo_air_water:
-            # AIR
-            SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.AIR_STOL)
-            SIM.amorphous_sample_thick_mm = 5
-            SIM.amorphous_density_gcm3 = 1.2e-3
-            SIM.amorphous_molecular_weight_Da = 14  # nitrogen = N2
+        try:
+            gpu_detector.scale_in_place(0)
             gpu_simulation.add_background(gpu_detector)
-
-            # WATER
-            SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.WATER_STOL)
-            SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
-            SIM.amorphous_density_gcm3 = 1
-            SIM.amorphous_molecular_weight_Da = 18
-            gpu_simulation.add_background(gpu_detector)
-            water = gpu_detector.get_raw_pixels().as_numpy_array()
-
-        #flex_spots = flex.double(spots_scaled)
-        #gpu_detector.offset_in_place(flex_spots)
-
-        # NOISE:
-        #SIM.detector_calibration_noise_pct = 3
-        #SIM.adc_offset_adu = 0
-        #SIM.quantum_gain = 1
-        #SIM.readout_noise_adu = 0
-        #gpu_detector.noisify(SIM.flicker_noise_pct, SIM.detector_calibration_noise_pct/100., SIM.readout_noise_adu,
-        #                     SIM.quantum_gain, SIM.adc_offset_adu, 0)
-        nominal_data = gpu_detector.get_raw_pixels().as_numpy_array()
-        gpu_detector.each_image_free()  # deallocate GPU arrays
-        #gpu_detector.free_random_states()
+            if redo_air_water:
+                # AIR
+                SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.AIR_STOL)
+                SIM.amorphous_sample_thick_mm = 5
+                SIM.amorphous_density_gcm3 = 1.2e-3
+                SIM.amorphous_molecular_weight_Da = 14  # nitrogen = N2
+                gpu_simulation.add_background(gpu_detector)
+                # WATER
+                SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.WATER_STOL)
+                SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
+                SIM.amorphous_density_gcm3 = 1
+                SIM.amorphous_molecular_weight_Da = 18
+                gpu_simulation.add_background(gpu_detector)
+            nominal_data = gpu_detector.get_raw_pixels().as_numpy_array()
+        finally:
+            gpu_detector.each_image_free()
         del gpu_detector
-        del gpu_simulation, SIM  # free C++ backing store immediately; don't wait for GC
+        del gpu_simulation, SIM
         return nominal_data
+
+    def sim_background_multipanel(self, det, beam, dev, stol_name, redo_air_water=False):
+        """Compute background for all panels in a single GPU call.
+
+        add_background (simulation.cu) already loops over gdt.cu_n_panels internally,
+        so one call with a full multi-panel gpu_det covers all panels at once.
+        get_raw_pixels() returns shape (n_panels, slow, fast) with no panel-count
+        restriction — unlike write_raw_pixels() which asserts cu_n_panels==1.
+
+        Returns a flat 1D numpy array of background pixels for all panels concatenated
+        in panel order (matching _pixel_offsets from geom_parser).
+        """
+        spectrum = [(beam.get_wavelength(), 1)]
+        xray_beams = get_xray_beams(spectrum, beam)
+        SIM = nanoBragg(det, beam, panel_id=0)
+        SIM.beamsize_mm = paths_and_const.BEAM_SIZE_MM
+        SIM.xray_beams = xray_beams
+        SIM.flux = paths_and_const.FLUX
+        SIM.Fbg_vs_stol = make_sims.load_stol(stol_name)
+        SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
+        SIM.amorphous_density_gcm3 = 1
+        SIM.amorphous_molecular_weight_Da = 12
+        gpu_sim = self.exascale_api(nanoBragg=SIM)
+        gpu_sim.allocate()
+        gpu_det = self.gpud(deviceId=dev, detector=det, beam=beam)
+        gpu_det.each_image_allocate()
+        try:
+            gpu_det.scale_in_place(0)
+            gpu_sim.add_background(gpu_det)
+            if redo_air_water:
+                for mw, thick, density, stol_f in [
+                    (14, 5, 1.2e-3, paths_and_const.AIR_STOL),
+                    (18, paths_and_const.XTALSIZE_MM, 1, paths_and_const.WATER_STOL),
+                ]:
+                    SIM.Fbg_vs_stol = make_sims.load_stol(stol_f)
+                    SIM.amorphous_sample_thick_mm = thick
+                    SIM.amorphous_density_gcm3 = density
+                    SIM.amorphous_molecular_weight_Da = mw
+                    gpu_sim.add_background(gpu_det)
+            all_px = gpu_det.get_raw_pixels().as_numpy_array()  # shape (n_panels, slow, fast)
+        finally:
+            gpu_det.each_image_free()
+        del gpu_det, gpu_sim, SIM
+        return np.concatenate([all_px[pid].ravel() for pid in range(len(det))])
 
 
 def reso2radius(reso, DET, BEAM):
@@ -417,38 +565,27 @@ def reso2radius(reso, DET, BEAM):
 
 
 def shift_center(det, delta_x, delta_y):
-    """
-    :param det: dxtbx detector model (single panel)
-    :param delta_x: beam center shift in pixels (fast dim)
-    :param delta_y: beam center shift in pixels (slow dim)
-    :return: dxtbx detector model with shifted center
-    """
-    dd = det[0].to_dict()
-    F = np.array(dd["fast_axis"])
-    S = np.array(dd["slow_axis"])
-    O = np.array(dd['origin'])
-    pixsize = det[0].get_pixel_size()[0]
-    O2 = O + F * pixsize * delta_x + S * pixsize * delta_y
-    dd["origin"] = tuple(O2)
+    """Shift beam center for all panels in a detector."""
     new_det = Detector()
-    new_pan = Panel.from_dict(dd)
-    new_det.add_panel(new_pan)
+    for panel in det:
+        dd = panel.to_dict()
+        F = np.array(dd["fast_axis"])
+        S = np.array(dd["slow_axis"])
+        O = np.array(dd['origin'])
+        pixsize = panel.get_pixel_size()[0]
+        dd["origin"] = tuple(O + F * pixsize * delta_x + S * pixsize * delta_y)
+        new_det.add_panel(Panel.from_dict(dd))
     return new_det
 
 def shift_distance(det, delta_z):
-    """
-    :param det: dxtbx detector model (single panel)
-    :param delta_z: distance shift in millimeters
-    :return: dxtbx detector model with shifted center
-    """
-    dd = det[0].to_dict()
-    F = np.array(dd["fast_axis"])
-    S = np.array(dd["slow_axis"])
-    O = np.array(dd['origin'])
-    Orth = np.cross(F,S)
-    O2 = O + Orth*delta_z
-    dd["origin"] = tuple(O2)
+    """Shift detector distance for all panels in a detector."""
     new_det = Detector()
-    new_pan = Panel.from_dict(dd)
-    new_det.add_panel(new_pan)
+    for panel in det:
+        dd = panel.to_dict()
+        F = np.array(dd["fast_axis"])
+        S = np.array(dd["slow_axis"])
+        O = np.array(dd['origin'])
+        Orth = np.cross(F, S)
+        dd["origin"] = tuple(O + Orth * delta_z)
+        new_det.add_panel(Panel.from_dict(dd))
     return new_det

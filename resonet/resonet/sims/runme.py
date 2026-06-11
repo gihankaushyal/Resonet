@@ -9,6 +9,12 @@ def main():
     args_parsed = args()
 
     rank_offset = args_parsed.rankOffset
+    if rank_offset > 0 and args_parsed.totalRanks is None:
+        if COMM.rank == 0:
+            raise ValueError(
+                "--rankOffset requires --totalRanks to be set explicitly. "
+                f"E.g. --rankOffset {rank_offset} --totalRanks {rank_offset + COMM.size}"
+            )
     total_ranks = args_parsed.totalRanks if args_parsed.totalRanks is not None else COMM.size
 
     # generate random seeds covering all effective ranks
@@ -50,7 +56,7 @@ def main():
                     o.write(tb_s)
             except OSError as file_err:
                 print(f"RANK {effective_rank}: could not write {err_file}: {file_err}", file=sys.stderr, flush=True)
-            raise
+            COMM.Abort(1)
 
 
 if __name__=="__main__":

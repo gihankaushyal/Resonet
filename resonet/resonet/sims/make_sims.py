@@ -138,16 +138,15 @@ def get_deltaB_factor(hres=None):
     return B, stol, fac
 
 
-def get_theta_map(detector, beam):
+def get_theta_map(detector, beam, panel_id=None):
     """
-
     :param detector: dxtbx detector
     :param beam: dxtbx beam
+    :param panel_id: None or 0 → return STOL for panel 0 (backward compat).
+                     'all' → return list of STOL arrays, one per panel.
     :return: sin-theta-over-lambda for each pixel
     """
     Qmags = {}
-    DIFFRACTED = {}
-    AIRPATH ={}
     unit_s0 = beam.get_unit_s0()
     for pid in range(len(detector)):
         xdim, ydim = detector[pid].get_image_size()
@@ -159,30 +158,47 @@ def get_theta_map(detector, beam):
 
         Ypos, Xpos = np.indices(panel_sh)
         px = detector[pid].get_pixel_size()[0]
-        Ypos = Ypos* px
-        Xpos = Xpos*px
+        Ypos = Ypos * px
+        Xpos = Xpos * px
 
         SX = ORIG[0] + FAST[0]*Xpos + SLOW[0]*Ypos
         SY = ORIG[1] + FAST[1]*Xpos + SLOW[1]*Ypos
         SZ = ORIG[2] + FAST[2]*Xpos + SLOW[2]*Ypos
-        AIRPATH[pid] = np.sqrt(SX**2 + SY**2 + SZ**2)   # units of mm
 
         Snorm = np.sqrt(SX**2 + SY**2 + SZ**2)
-
         SX /= Snorm
         SY /= Snorm
         SZ /= Snorm
-
-        DIFFRACTED[pid] = np.array([SX, SY, SZ])
 
         QX = (SX - unit_s0[0]) / beam.get_wavelength()
         QY = (SY - unit_s0[1]) / beam.get_wavelength()
         QZ = (SZ - unit_s0[2]) / beam.get_wavelength()
         Qmags[pid] = np.sqrt(QX**2 + QY**2 + QZ**2)
 
-    Qmags = Qmags[0]  # only working with single panel dets
-    STOL = Qmags/2
-    return STOL
+        # Early exit for single-panel case to avoid unnecessary computation
+        if panel_id is None or panel_id == 0:
+            break
+
+    if panel_id == 'all':
+        return [Qmags[pid] / 2 for pid in range(len(detector))]
+    return Qmags[0] / 2
+
+
+def get_Bfac_img_flat(stol_list, hres=None):
+    """Like get_Bfac_img but for a list of per-panel STOL arrays.
+
+    Draws a single B-factor and applies it consistently across all panels
+    so that the resolution truncation is uniform for the whole shot.
+
+    :param stol_list: list of per-panel STOL arrays
+    :param hres: optional high-resolution limit
+    :return: (reso, Bfac_flat) where Bfac_flat is a 1D array for all panels
+    """
+    B, stol, factor = get_deltaB_factor(hres)
+    I = interp1d(stol, factor, bounds_error=False, fill_value=0)
+    Bfac_flat = np.concatenate([I(s.ravel()) for s in stol_list])
+    reso = np.sqrt(.25 * (B + 10 - 12))
+    return reso, Bfac_flat
 
 
 def set_noise(noise_sim, calib_noise_percent=3):

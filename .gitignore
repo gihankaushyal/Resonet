@@ -4,9 +4,12 @@ test_shots*/
 simforge/
 easyBragg/
 
-# HDF5 data files
+# HDF5 and CXI data files
 *.h5
 *.hdf5
+*.cxi
+cxi_*/
+*_failure.err
 
 # SLURM logs
 *.log
