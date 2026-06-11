@@ -366,6 +366,9 @@ def run(args, seeds, jid, njobs, gvec=None):
                 gc.collect()
                 if _malloc_trim is not None:
                     _malloc_trim(0)
+                if i_shot < 300 and i_shot % 10 == 0 or i_shot >= 300 and i_shot % 50 == 0:
+                    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                    print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
         finally:
             _cxi_writer.close()
         ave_t = np.mean(times)
