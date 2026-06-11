@@ -66,12 +66,30 @@ def parse_geom(path: str) -> tuple:
                     except ValueError:
                         pass  # dynamic field like /LCLS/photon_energy_eV
 
+    missing_globals = [k for k in ('clen', 'res') if k not in globals_]
+    if missing_globals:
+        raise ValueError(
+            f"Geom file '{path}' missing required global fields: {missing_globals}. "
+            f"Found globals: {list(globals_.keys())}. "
+            "Dynamic LCLS-style references (e.g. 'clen = /LCLS/...') are not supported."
+        )
+
     required_panel_fields = {'fs', 'ss', 'corner_x', 'corner_y',
                              'min_fs', 'max_fs', 'min_ss', 'max_ss'}
     valid_panels = [
         p for p in panels.values()
         if required_panel_fields.issubset(p.keys())
     ]
+    if not valid_panels:
+        missing = {
+            name: list(required_panel_fields - set(p.keys()))
+            for name, p in panels.items()
+            if not required_panel_fields.issubset(p.keys())
+        }
+        raise ValueError(
+            f"No valid panels found in '{path}'. "
+            f"Panels with missing fields: {missing}"
+        )
     valid_panels.sort(key=_panel_sort_key)
 
     clen = globals_['clen']

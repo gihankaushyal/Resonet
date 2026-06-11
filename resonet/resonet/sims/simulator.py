@@ -73,8 +73,10 @@ class Simulator:
                 self.gpud = get_exascale("gpu_detector", "cuda")
                 self.exascale_api = get_exascale("exascale_api", "cuda")
                 self.gpu_channels_type = get_exascale("gpu_energy_channels", "cuda")
-            except ImportError:
-                print("Warning, simtbx_gpu_ext not installed, background simulation will be slow!")
+            except ImportError as e:
+                self.gpud = self.exascale_api = self.gpu_channels_type = None
+                self.cuda = False
+                print(f"Warning: GPU unavailable ({e}); falling back to CPU background simulation.", flush=True)
 
     def simulate(self, rot_mat=None, multi_lattice_chance=0, max_lat=2, mos_min_max=None,
                  pdb_name=None, plastic_stol=None, dev=0, mos_dom_override=None, vary_background_scale=False,
@@ -256,12 +258,14 @@ class Simulator:
             gpu_sim.allocate()
             gpu_det = self.gpud(deviceId=dev, detector=shot_det, beam=shot_beam)
             gpu_det.each_image_allocate()
-            gpu_det.scale_in_place(0)
-            gpu_sim.add_energy_channel_from_gpu_amplitudes(0, gpu_channels, gpu_det)
-            all_px = gpu_det.get_raw_pixels().as_numpy_array()  # (n_panels, slow, fast)
-            spots = np.concatenate([all_px[pid].ravel() for pid in range(n_panels)])
-            img_sh = (spots.size,)
-            gpu_det.each_image_free()
+            try:
+                gpu_det.scale_in_place(0)
+                gpu_sim.add_energy_channel_from_gpu_amplitudes(0, gpu_channels, gpu_det)
+                all_px = gpu_det.get_raw_pixels().as_numpy_array()  # (n_panels, slow, fast)
+                spots = np.concatenate([all_px[pid].ravel() for pid in range(n_panels)])
+                img_sh = (spots.size,)
+            finally:
+                gpu_det.each_image_free()
             del gpu_det, gpu_sim, gpu_channels
         elif do_multi_panel:
             # CPU fallback when GPU not available
@@ -475,45 +479,27 @@ class Simulator:
         gpu_simulation.allocate()
         gpu_detector = self.gpud(deviceId=dev, detector=det, beam=beam)
         gpu_detector.each_image_allocate()
-        #gpu_detector.setup_random_states()  # how long is this
-        #zeros = flex.double(np.zeros(spots_scaled.size))
-        #gpu_detector.set_raw_pixels(zeros)
-        gpu_detector.scale_in_place(0)
-
-        # add the plastic
-        gpu_simulation.add_background(gpu_detector)
-
-        if redo_air_water:
-            # AIR
-            SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.AIR_STOL)
-            SIM.amorphous_sample_thick_mm = 5
-            SIM.amorphous_density_gcm3 = 1.2e-3
-            SIM.amorphous_molecular_weight_Da = 14  # nitrogen = N2
+        try:
+            gpu_detector.scale_in_place(0)
             gpu_simulation.add_background(gpu_detector)
-
-            # WATER
-            SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.WATER_STOL)
-            SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
-            SIM.amorphous_density_gcm3 = 1
-            SIM.amorphous_molecular_weight_Da = 18
-            gpu_simulation.add_background(gpu_detector)
-            water = gpu_detector.get_raw_pixels().as_numpy_array()
-
-        #flex_spots = flex.double(spots_scaled)
-        #gpu_detector.offset_in_place(flex_spots)
-
-        # NOISE:
-        #SIM.detector_calibration_noise_pct = 3
-        #SIM.adc_offset_adu = 0
-        #SIM.quantum_gain = 1
-        #SIM.readout_noise_adu = 0
-        #gpu_detector.noisify(SIM.flicker_noise_pct, SIM.detector_calibration_noise_pct/100., SIM.readout_noise_adu,
-        #                     SIM.quantum_gain, SIM.adc_offset_adu, 0)
-        nominal_data = gpu_detector.get_raw_pixels().as_numpy_array()
-        gpu_detector.each_image_free()  # deallocate GPU arrays
-        #gpu_detector.free_random_states()
+            if redo_air_water:
+                # AIR
+                SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.AIR_STOL)
+                SIM.amorphous_sample_thick_mm = 5
+                SIM.amorphous_density_gcm3 = 1.2e-3
+                SIM.amorphous_molecular_weight_Da = 14  # nitrogen = N2
+                gpu_simulation.add_background(gpu_detector)
+                # WATER
+                SIM.Fbg_vs_stol = make_sims.load_stol(paths_and_const.WATER_STOL)
+                SIM.amorphous_sample_thick_mm = paths_and_const.XTALSIZE_MM
+                SIM.amorphous_density_gcm3 = 1
+                SIM.amorphous_molecular_weight_Da = 18
+                gpu_simulation.add_background(gpu_detector)
+            nominal_data = gpu_detector.get_raw_pixels().as_numpy_array()
+        finally:
+            gpu_detector.each_image_free()
         del gpu_detector
-        del gpu_simulation, SIM  # free C++ backing store immediately; don't wait for GC
+        del gpu_simulation, SIM
         return nominal_data
 
     def sim_background_multipanel(self, det, beam, dev, stol_name, redo_air_water=False):
@@ -541,20 +527,22 @@ class Simulator:
         gpu_sim.allocate()
         gpu_det = self.gpud(deviceId=dev, detector=det, beam=beam)
         gpu_det.each_image_allocate()
-        gpu_det.scale_in_place(0)
-        gpu_sim.add_background(gpu_det)
-        if redo_air_water:
-            for mw, thick, density, stol_f in [
-                (14, 5, 1.2e-3, paths_and_const.AIR_STOL),
-                (18, paths_and_const.XTALSIZE_MM, 1, paths_and_const.WATER_STOL),
-            ]:
-                SIM.Fbg_vs_stol = make_sims.load_stol(stol_f)
-                SIM.amorphous_sample_thick_mm = thick
-                SIM.amorphous_density_gcm3 = density
-                SIM.amorphous_molecular_weight_Da = mw
-                gpu_sim.add_background(gpu_det)
-        all_px = gpu_det.get_raw_pixels().as_numpy_array()  # shape (n_panels, slow, fast)
-        gpu_det.each_image_free()
+        try:
+            gpu_det.scale_in_place(0)
+            gpu_sim.add_background(gpu_det)
+            if redo_air_water:
+                for mw, thick, density, stol_f in [
+                    (14, 5, 1.2e-3, paths_and_const.AIR_STOL),
+                    (18, paths_and_const.XTALSIZE_MM, 1, paths_and_const.WATER_STOL),
+                ]:
+                    SIM.Fbg_vs_stol = make_sims.load_stol(stol_f)
+                    SIM.amorphous_sample_thick_mm = thick
+                    SIM.amorphous_density_gcm3 = density
+                    SIM.amorphous_molecular_weight_Da = mw
+                    gpu_sim.add_background(gpu_det)
+            all_px = gpu_det.get_raw_pixels().as_numpy_array()  # shape (n_panels, slow, fast)
+        finally:
+            gpu_det.each_image_free()
         del gpu_det, gpu_sim, SIM
         return np.concatenate([all_px[pid].ravel() for pid in range(len(det))])
 

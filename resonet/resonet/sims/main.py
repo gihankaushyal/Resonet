@@ -305,61 +305,63 @@ def run(args, seeds, jid, njobs, gvec=None):
             assert en1 < en2
             random_wave = lambda: np.random.uniform(en1, en2)
         times = []
-        for i_shot in range(Nshot):
-            t = time.time()
-            pdb_name = args.pdbName
-            if pdb_name is not None:
-                pdb_name = pdb_name.replace("//", "/")
-            HS.mask = mask
-            if not args.bgOnly and args.randHits:
-                HS.bg_only = np.random.choice([0, 1])
-            params, spots, imgs, shot_det, shot_beam = HS.simulate(
-                rot_mat=rotMats[i_shot],
-                multi_lattice_chance=args.multiChance,
-                mos_min_max=args.mosMinMax,
-                max_lat=args.maxLat,
-                dev=dev,
-                mos_dom_override=args.nmos,
-                vary_background_scale=args.varyBgScale,
-                pdb_name=pdb_name,
-                randomize_dist=random_dist,
-                randomize_center=args.randCent,
-                randomize_wavelen=random_wave,
-                randomize_scale=args.randScale,
-                low_bg_chance=args.lowBgChance,
-                uniform_reso=args.uniReso,
-                multi_panel=True,
-            )
-            flat_img = imgs[0]
-            assert flat_img.size == sum(pm['n_fast'] * pm['n_slow'] for pm in _panel_map), (
-                f"flat_img size {flat_img.size} != expected "
-                f"{sum(pm['n_fast']*pm['n_slow'] for pm in _panel_map)} panel pixels"
-            )
-            unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
-            for pm, pix_off in zip(_panel_map, _pixel_offsets):
-                n_px = pm['n_fast'] * pm['n_slow']
-                panel_data = flat_img[pix_off:pix_off + n_px].reshape(
-                    pm['n_slow'], pm['n_fast']
+        try:
+            for i_shot in range(Nshot):
+                t = time.time()
+                pdb_name = args.pdbName
+                if pdb_name is not None:
+                    pdb_name = pdb_name.replace("//", "/")
+                HS.mask = mask
+                if not args.bgOnly and args.randHits:
+                    HS.bg_only = np.random.choice([0, 1])
+                params, spots, imgs, shot_det, shot_beam = HS.simulate(
+                    rot_mat=rotMats[i_shot],
+                    multi_lattice_chance=args.multiChance,
+                    mos_min_max=args.mosMinMax,
+                    max_lat=args.maxLat,
+                    dev=dev,
+                    mos_dom_override=args.nmos,
+                    vary_background_scale=args.varyBgScale,
+                    pdb_name=pdb_name,
+                    randomize_dist=random_dist,
+                    randomize_center=args.randCent,
+                    randomize_wavelen=random_wave,
+                    randomize_scale=args.randScale,
+                    low_bg_chance=args.lowBgChance,
+                    uniform_reso=args.uniReso,
+                    multi_panel=True,
                 )
-                unassembled[
-                    pm['min_ss']:pm['max_ss'] + 1,
-                    pm['min_fs']:pm['max_fs'] + 1
-                ] = panel_data
-            unassembled = np.sqrt(np.maximum(unassembled, 0.0))
-            unassembled = np.clip(unassembled, 0, np.sqrt(65535)).astype(np.uint16)
-            shot_labels = {
-                'hit': float(0 if HS.bg_only else 1),
-                'detector_distance': float(params['detector_distance']),
-                'wavelength': float(params['wavelength']),
-            }
-            _cxi_writer.add_frame(unassembled, labels=shot_labels)
-            t = time.time() - t
-            times.append(t)
-            print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} (took {t:.4f} sec).", flush=True)
-            gc.collect()
-            if _malloc_trim is not None:
-                _malloc_trim(0)
-        _cxi_writer.close()
+                flat_img = imgs[0]
+                assert flat_img.size == sum(pm['n_fast'] * pm['n_slow'] for pm in _panel_map), (
+                    f"flat_img size {flat_img.size} != expected "
+                    f"{sum(pm['n_fast']*pm['n_slow'] for pm in _panel_map)} panel pixels"
+                )
+                unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
+                for pm, pix_off in zip(_panel_map, _pixel_offsets):
+                    n_px = pm['n_fast'] * pm['n_slow']
+                    panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                        pm['n_slow'], pm['n_fast']
+                    )
+                    unassembled[
+                        pm['min_ss']:pm['max_ss'] + 1,
+                        pm['min_fs']:pm['max_fs'] + 1
+                    ] = panel_data
+                unassembled = np.sqrt(np.maximum(unassembled, 0.0))
+                unassembled = np.clip(unassembled, 0, np.sqrt(65535)).astype(np.uint16)
+                shot_labels = {
+                    'hit': float(0 if HS.bg_only else 1),
+                    'detector_distance': float(params['detector_distance']),
+                    'wavelength': float(params['wavelength']),
+                }
+                _cxi_writer.add_frame(unassembled, labels=shot_labels)
+                t = time.time() - t
+                times.append(t)
+                print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} (took {t:.4f} sec).", flush=True)
+                gc.collect()
+                if _malloc_trim is not None:
+                    _malloc_trim(0)
+        finally:
+            _cxi_writer.close()
         ave_t = np.mean(times)
         print(f"RANK {jid+1}/{njobs}: Done! CXI output: {outname}. Avg {ave_t:.4f} sec/image.", flush=True)
     else:

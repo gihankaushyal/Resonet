@@ -77,5 +77,5 @@ def test_add_frame_wrong_shape_raises():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, 'test.cxi')
         w = CXIWriter(path, (5632, 384), METADATA)
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             w.add_frame(np.zeros((512, 512), dtype=np.uint16))
