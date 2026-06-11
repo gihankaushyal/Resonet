@@ -1,14 +1,21 @@
 """Parse CrystFEL .geom files and convert to dxtbx Detector objects."""
 import re
 from typing import Any
-from dxtbx.model.detector import DetectorFactory
 
 
 def _parse_axis(s: str) -> tuple:
-    """Parse CrystFEL axis string e.g. '-0.999991x +0.004221y' to (x, y, z)."""
+    """Parse CrystFEL axis string e.g. '-0.999991x +0.004221y' or 'x' or '-y' to (x, y, z)."""
     x = y = z = 0.0
-    for m in re.finditer(r'([+-]?(?:\d+\.?\d*|\d*\.\d+)(?:[eE][+-]?\d+)?)\s*([xyz])', s):
-        v, a = float(m.group(1)), m.group(2)
+    # Match numeric coefficient (e.g. '-0.999991x') or bare unit vector (e.g. 'x', '-y', '+z')
+    for m in re.finditer(r'([+-]?(?:(?:\d+\.?\d*|\d*\.\d+)(?:[eE][+-]?\d+)?)?)\s*([xyz])', s):
+        coeff_str, a = m.group(1), m.group(2)
+        # Bare '+' or '-' without digits means ±1; empty string means +1
+        if coeff_str in ('', '+'):
+            v = 1.0
+        elif coeff_str == '-':
+            v = -1.0
+        else:
+            v = float(coeff_str)
         if a == 'x':
             x = v
         elif a == 'y':
@@ -58,7 +65,10 @@ def parse_geom(path: str) -> tuple:
                     try:
                         panels[panel_name][field] = float(value)
                     except ValueError:
-                        pass
+                        raise ValueError(
+                            f"Geom file '{path}': panel '{panel_name}' field "
+                            f"'{field}' has non-numeric value '{value}'."
+                        ) from None
             else:
                 if key in ('clen', 'photon_energy', 'res'):
                     try:
@@ -66,7 +76,7 @@ def parse_geom(path: str) -> tuple:
                     except ValueError:
                         pass  # dynamic field like /LCLS/photon_energy_eV
 
-    missing_globals = [k for k in ('clen', 'res') if k not in globals_]
+    missing_globals = [k for k in ('clen', 'res', 'photon_energy') if k not in globals_]
     if missing_globals:
         raise ValueError(
             f"Geom file '{path}' missing required global fields: {missing_globals}. "
@@ -151,5 +161,6 @@ def parse_geom(path: str) -> tuple:
             'n_slow': n_slow,
         })
 
+    from dxtbx.model.detector import DetectorFactory
     detector = DetectorFactory.from_dict({'panels': panel_dicts})
     return detector, panel_map, globals_

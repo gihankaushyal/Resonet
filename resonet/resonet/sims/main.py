@@ -136,6 +136,13 @@ def run(args, seeds, jid, njobs, gvec=None):
 
     _outfmt_cxi = getattr(args, 'outfmt', 'hdf5') == 'cxi'
     if _outfmt_cxi:
+        for _ignored_arg, _flag in [
+            (getattr(args, 'beamStop', None), '--beamStop'),
+            (getattr(args, 'noHot', False), '--noHot'),
+            (getattr(args, 'noBad', False), '--noBad'),
+        ]:
+            if _ignored_arg:
+                print(f"WARNING: {_flag} is ignored in --outfmt cxi mode", flush=True)
         if args.geomfile is None:
             raise ValueError("--geomfile is required when --outfmt cxi")
         if args.detector_name is None:
@@ -266,46 +273,46 @@ def run(args, seeds, jid, njobs, gvec=None):
 
     if _outfmt_cxi:
         _cxi_writer = CXIWriter(outname, (_n_ss, _n_fs), _cxi_meta)
-        if args.randAxis:
-            assert gvec is not None
-            angle = np.random.uniform(-180, 180, Nshot)
-            rot_vecs = np.array([gvec / np.linalg.norm(gvec)] * Nshot)
-            rot_vecs *= angle[:, None]
-            rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
-        elif args.axisRotOnly is not None:
-            angle = np.random.uniform(-180, 180, Nshot)
-            rot_vecs = np.zeros((Nshot, 3))
-            rot_vecs[:, args.axisRotOnly] = angle
-            rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
-        elif args.twoAxisOnly is not None:
-            angle = np.random.uniform(-180, 180, Nshot)
-            gvecs = np.random.normal(0, 1, (Nshot, 2))
-            uvecs = gvecs / np.linalg.norm(gvecs, axis=1)[:, None]
-            rot_vecs = np.zeros((Nshot, 3))
-            if args.twoAxisOnly == 0:
-                rot_vecs[:, [0, 1]] = uvecs
-            elif args.twoAxisOnly == 1:
-                rot_vecs[:, [0, 2]] = uvecs
-            else:
-                rot_vecs[:, [1, 2]] = uvecs
-            rot_vecs *= angle[:, None]
-            rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
-        else:
-            rotMats = Rotation.random(Nshot).as_matrix()
-        random_dist = random_wave = None
-        if args.randDist:
-            if args.randDistChoice is not None:
-                random_dist = lambda: np.random.choice(args.randDistChoice)
-            else:
-                d1, d2 = args.randDistRange
-                assert d1 < d2
-                random_dist = lambda: np.random.uniform(d1, d2)
-        if args.randWave:
-            en1, en2 = args.randWaveRange
-            assert en1 < en2
-            random_wave = lambda: np.random.uniform(en1, en2)
-        times = []
         try:
+            if args.randAxis:
+                assert gvec is not None
+                angle = np.random.uniform(-180, 180, Nshot)
+                rot_vecs = np.array([gvec / np.linalg.norm(gvec)] * Nshot)
+                rot_vecs *= angle[:, None]
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            elif args.axisRotOnly is not None:
+                angle = np.random.uniform(-180, 180, Nshot)
+                rot_vecs = np.zeros((Nshot, 3))
+                rot_vecs[:, args.axisRotOnly] = angle
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            elif args.twoAxisOnly is not None:
+                angle = np.random.uniform(-180, 180, Nshot)
+                gvecs = np.random.normal(0, 1, (Nshot, 2))
+                uvecs = gvecs / np.linalg.norm(gvecs, axis=1)[:, None]
+                rot_vecs = np.zeros((Nshot, 3))
+                if args.twoAxisOnly == 0:
+                    rot_vecs[:, [0, 1]] = uvecs
+                elif args.twoAxisOnly == 1:
+                    rot_vecs[:, [0, 2]] = uvecs
+                else:
+                    rot_vecs[:, [1, 2]] = uvecs
+                rot_vecs *= angle[:, None]
+                rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
+            else:
+                rotMats = Rotation.random(Nshot).as_matrix()
+            random_dist = random_wave = None
+            if args.randDist:
+                if args.randDistChoice is not None:
+                    random_dist = lambda: np.random.choice(args.randDistChoice)
+                else:
+                    d1, d2 = args.randDistRange
+                    assert d1 < d2
+                    random_dist = lambda: np.random.uniform(d1, d2)
+            if args.randWave:
+                en1, en2 = args.randWaveRange
+                assert en1 < en2
+                random_wave = lambda: np.random.uniform(en1, en2)
+            times = []
             for i_shot in range(Nshot):
                 t = time.time()
                 pdb_name = args.pdbName
@@ -331,29 +338,28 @@ def run(args, seeds, jid, njobs, gvec=None):
                     uniform_reso=args.uniReso,
                     multi_panel=True,
                 )
-                flat_img = imgs[0]
-                assert flat_img.size == sum(pm['n_fast'] * pm['n_slow'] for pm in _panel_map), (
-                    f"flat_img size {flat_img.size} != expected "
-                    f"{sum(pm['n_fast']*pm['n_slow'] for pm in _panel_map)} panel pixels"
-                )
-                unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
-                for pm, pix_off in zip(_panel_map, _pixel_offsets):
-                    n_px = pm['n_fast'] * pm['n_slow']
-                    panel_data = flat_img[pix_off:pix_off + n_px].reshape(
-                        pm['n_slow'], pm['n_fast']
-                    )
-                    unassembled[
-                        pm['min_ss']:pm['max_ss'] + 1,
-                        pm['min_fs']:pm['max_fs'] + 1
-                    ] = panel_data
-                unassembled = np.sqrt(np.maximum(unassembled, 0.0))
-                unassembled = np.clip(unassembled, 0, np.sqrt(65535)).astype(np.uint16)
+                n_px_expected = sum(pm['n_fast'] * pm['n_slow'] for pm in _panel_map)
                 shot_labels = {
                     'hit': float(0 if HS.bg_only else 1),
                     'detector_distance': float(params['detector_distance']),
                     'wavelength': float(params['wavelength']),
                 }
-                _cxi_writer.add_frame(unassembled, labels=shot_labels)
+                for flat_img in imgs:
+                    assert flat_img.size == n_px_expected, (
+                        f"flat_img size {flat_img.size} != expected {n_px_expected} panel pixels"
+                    )
+                    unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
+                    for pm, pix_off in zip(_panel_map, _pixel_offsets):
+                        n_px = pm['n_fast'] * pm['n_slow']
+                        panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                            pm['n_slow'], pm['n_fast']
+                        )
+                        unassembled[
+                            pm['min_ss']:pm['max_ss'] + 1,
+                            pm['min_fs']:pm['max_fs'] + 1
+                        ] = panel_data
+                    unassembled = np.clip(unassembled, 0, 65535).astype(np.uint16)
+                    _cxi_writer.add_frame(unassembled, labels=shot_labels)
                 t = time.time() - t
                 times.append(t)
                 print(f"RANK {jid+1}/{njobs}: Done with shot {i_shot+1}/{Nshot} (took {t:.4f} sec).", flush=True)

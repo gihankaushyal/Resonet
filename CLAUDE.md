@@ -48,7 +48,7 @@ cd resonet && pip install -e .
 
 **Simulate diffraction data (MPI, GPU):**
 ```bash
-srun --export=ALL resonet-simulate <outdir> --nshot <N> --geom eiger --randDist --randDistRange 100 300 --ngpu=1 --randHit
+srun --export=ALL resonet-simulate <outdir> --nshot <N> --geom eiger --randDist --randDistRange 100 300 --ngpu=1 --randHits
 ```
 
 **Download simulation data assets:**

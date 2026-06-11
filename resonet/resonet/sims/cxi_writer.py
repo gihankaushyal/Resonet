@@ -70,15 +70,19 @@ class CXIWriter:
             lbl_grp = self._file.require_group('entry_1/labels')
             for key, val in labels.items():
                 if key not in self._label_keys:
-                    lbl_grp.create_dataset(
+                    ds = lbl_grp.create_dataset(
                         key,
-                        shape=(0,),
+                        shape=(n + 1,),
                         maxshape=(None,),
                         dtype=np.float32,
                     )
+                    if n > 0:
+                        # frames before this key first appeared have no valid label
+                        ds[:n] = np.nan
                     self._label_keys.add(key)
-                ds = lbl_grp[key]
-                ds.resize(n + 1, axis=0)
+                else:
+                    ds = lbl_grp[key]
+                    ds.resize(n + 1, axis=0)
                 ds[n] = float(val)
 
     def close(self):

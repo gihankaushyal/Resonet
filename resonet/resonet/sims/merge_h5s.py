@@ -57,39 +57,41 @@ def _merge_cxi(fnames, outname, prefix):
 
 
 def _merge_h5(fnames, outname, prefix, more_keys):
-    dummie_h = h5py.File(fnames[0], "r")
+    with h5py.File(fnames[0], "r") as dummie_h:
+        shapes = {}
+        for key in ["images_mean", "images", "labels", "full_maximg", "geom"] + more_keys:
+            try:
+                shapes[key] = dummie_h[key].shape[1:]
+            except KeyError:
+                pass
 
-    shapes = {}
-    for key in ["images_mean", "images", "labels", "full_maximg", "geom"] + more_keys:
-        try:
-            shapes[key] = dummie_h[key].shape[1:]
-        except KeyError:
-            pass
+        imgs_per_fname = []
+        for f in fnames:
+            with h5py.File(f, 'r') as fh:
+                imgs_per_fname.append(fh['labels'].shape[0])
+        total_imgs = sum(imgs_per_fname)
 
-    imgs_per_fname = [h5py.File(f, 'r')['labels'].shape[0] for f in fnames]
-    total_imgs = sum(imgs_per_fname)
+        Layouts = {}
+        for key, shape in shapes.items():
+            Layouts[key] = h5py.VirtualLayout(shape=(total_imgs,) + shape, dtype=dummie_h[key].dtype)
 
-    Layouts = {}
-    for key, shape in shapes.items():
-        Layouts[key] = h5py.VirtualLayout(shape=(total_imgs,) + shape, dtype=dummie_h[key].dtype)
+        start = 0
+        for i_f, f in enumerate(fnames):
+            print("virtualizing file %d / %d" % (i_f+1, len(fnames)))
+            nimg = imgs_per_fname[i_f]
+            for key in Layouts:
+                vsource = h5py.VirtualSource(f, key, shape=(nimg,) + shapes[key])
+                Layouts[key][start:start+nimg] = vsource
 
-    start = 0
-    for i_f, f in enumerate(fnames):
-        print("virtualizing file %d / %d" % (i_f+1, len(fnames)))
-        nimg = imgs_per_fname[i_f]
-        for key in Layouts:
-            vsource = h5py.VirtualSource(f, key, shape=(nimg,) + shapes[key])
-            Layouts[key][start:start+nimg] = vsource
+            start += nimg
 
-        start += nimg
-
-    print("Saving it all to %s!" % outname)
-    print("Total number of shots=%d" % total_imgs)
-    with h5py.File(outname, "w") as H:
-        for key in Layouts:
-            vd = H.create_virtual_dataset(key, Layouts[key])
-            for attr in ["names", "pdbmap"]:
-                if attr in dummie_h[key].attrs:
-                    vd.attrs[attr] = dummie_h[key].attrs[attr]
+        print("Saving it all to %s!" % outname)
+        print("Total number of shots=%d" % total_imgs)
+        with h5py.File(outname, "w") as H:
+            for key in Layouts:
+                vd = H.create_virtual_dataset(key, Layouts[key])
+                for attr in ["names", "pdbmap"]:
+                    if attr in dummie_h[key].attrs:
+                        vd.attrs[attr] = dummie_h[key].attrs[attr]
 
     print("Done!")
