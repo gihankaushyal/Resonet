@@ -1,0 +1,99 @@
+photon_energy = 11560 eV
+clen = 0.103
+bandwidth = 1.000000e-02
+res = 13333.300000
+data = /entry_0000/measurement/data
+adu_per_photon = 478.600000
+dim0 = %
+dim1 = ss
+dim2 = fs
+
+m0/min_fs = 0
+m0/max_fs = 1029
+m0/min_ss = 0
+m0/max_ss = 513
+m0/corner_x = -1010.487312
+m0/corner_y = -1084.365146
+m0/fs = 0.999996x +0.000174y +0.000000z
+m0/ss = -0.000174x +0.999996y +0.000000z
+m0/coffset = 0.000833
+
+m1/min_fs = 1038
+m1/max_fs = 2067
+m1/min_ss = 0
+m1/max_ss = 513
+m1/corner_x = 28.614462
+m1/corner_y = -1082.632168
+m1/fs = 1.000000x -0.001022y +0.000000z
+m1/ss = 0.001022x +1.000000y +0.000000z
+m1/coffset = 0.000833
+
+m2/min_fs = 0
+m2/max_fs = 1029
+m2/min_ss = 550
+m2/max_ss = 1063
+m2/corner_x = -1009.235920
+m2/corner_y = -537.843870
+m2/fs = 0.999995x +0.003044y +0.000000z
+m2/ss = -0.003044x +0.999995y +0.000000z
+m2/coffset = 0.000833
+
+m3/min_fs = 1038
+m3/max_fs = 2067
+m3/min_ss = 550
+m3/max_ss = 1063
+m3/corner_x = 28.613935
+m3/corner_y = -532.204814
+m3/fs = 0.999996x -0.000030y +0.000000z
+m3/ss = 0.000030x +0.999996y +0.000000z
+m3/coffset = 0.000833
+
+m4/min_fs = 0
+m4/max_fs = 1029
+m4/min_ss = 1100
+m4/max_ss = 1613
+m4/corner_x = -1010.473953
+m4/corner_y = 11.489673
+m4/fs = 0.999998x +0.002302y +0.000000z
+m4/ss = -0.002302x +0.999998y +0.000000z
+m4/coffset = 0.000833
+
+m5/min_fs = 1038
+m5/max_fs = 2067
+m5/min_ss = 1100
+m5/max_ss = 1613
+m5/corner_x = 27.903294
+m5/corner_y = 16.526247
+m5/fs = 0.999995x +0.003032y +0.000000z
+m5/ss = -0.003032x +0.999995y +0.000000z
+m5/coffset = 0.000833
+
+m6/min_fs = 0
+m6/max_fs = 1029
+m6/min_ss = 1650
+m6/max_ss = 2163
+m6/corner_x = -1012.712887
+m6/corner_y = 561.088006
+m6/fs = 0.999986x +0.005627y +0.000000z
+m6/ss = -0.005627x +0.999986y +0.000000z
+m6/coffset = 0.000833
+
+m7/min_fs = 1038
+m7/max_fs = 2067
+m7/min_ss = 1650
+m7/max_ss = 2163
+m7/corner_x = 27.202330
+m7/corner_y = 566.715124
+m7/fs = 0.999979x +0.005956y +0.000000z
+m7/ss = -0.005956x +0.999979y +0.000000z
+m7/coffset = 0.000833
+
+group_a = m0
+group_b = m1
+group_c = m2
+group_d = m3
+group_e = m4
+group_f = m5
+group_g = m6
+group_h = m7
+group_all = a,b,c,d,e,f,g,h
