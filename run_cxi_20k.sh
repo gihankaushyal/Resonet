@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1                 # 1 H100; all ranks share GPU 0 (multi-panel CUDA workaround)
 #SBATCH -n 5                         # 5 ranks x 4000 shots = 20k total
 #SBATCH -c 12                        # 12 CPUs/rank = 60 CPUs total
-#SBATCH --mem=400G                   # ~80 GB/rank headroom; peak observed ~6.4 GB/rank
+#SBATCH --mem=400G                   # 80 GB/rank ceiling; peak observed ~6.4 GB/rank (~12x margin)
 #SBATCH --time=12:00:00              # ~10 sec/shot x 4000 shots/rank ~ 11 hr; 12 hr wall
 #SBATCH --nodelist=scg020
 #SBATCH --output=cxi_20k_%j.log

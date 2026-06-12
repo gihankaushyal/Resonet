@@ -11,9 +11,10 @@
 #SBATCH --output=cxi_char_5k_%j.log
 
 # Goal: measure post-cache-fill steady-state RSS on the CXI multi-panel path.
-# The miller-array cache fills at ~shot 750/rank (117 PDBs x coupon-collector).
-# At 1000 shots/rank we see ~250 shots of steady-state — enough to confirm
-# whether RSS flattens (leaks fixed) or grows linearly (remaining leak).
+# Observed cache fill: ~950 shots/rank (117 PDBs x coupon-collector; tail extends
+# past the ~750-shot theoretical estimate). At 1000 shots/rank only ~50 shots of
+# post-fill steady-state are available — marginal but sufficient to confirm whether
+# the RSS curve has flattened by shot 1000.
 # RSS is logged every 10 shots for shots 0-299, then every 50 shots after that.
 
 source /data/bioxfel/user/gihan/Resonet/load_resonet.sh

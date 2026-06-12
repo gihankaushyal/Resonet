@@ -367,13 +367,18 @@ def run(args, seeds, jid, njobs, gvec=None):
                 if _malloc_trim is not None:
                     _malloc_trim(0)
                 if (i_shot < 300 and i_shot % 10 == 0) or (i_shot >= 300 and i_shot % 50 == 0):
+                    # /proc/self/status VmRSS is current RSS; ru_maxrss is peak-only and
+                    # never decreases, so it cannot show memory freed by malloc_trim above.
+                    rss_mb = None
                     try:
                         with open("/proc/self/status") as _f:
                             for _line in _f:
                                 if _line.startswith("VmRSS:"):
-                                    rss_mb = int(_line.split()[1]) / 1024
+                                    rss_mb = int(_line.split()[1]) / 1024  # kB → MB
                                     break
-                    except OSError:
+                    except (OSError, ValueError):
+                        pass
+                    if rss_mb is None:
                         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                     print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
         finally:
