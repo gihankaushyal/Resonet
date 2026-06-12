@@ -67,6 +67,7 @@ class Simulator:
         self.xtal_shape = "gauss"  # shape of the RELP, can be square, gauss, or gauss_star
         self.shots_per_example = 1  # if provided simulate will return multiple images, each with a different crystal orientation and noise
         self.mask = None  # place holder for numpy-style pixel mask
+        self.flux = paths_and_const.FLUX  # per-shot flux; overridable externally
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -409,6 +410,9 @@ class Simulator:
                 img = bg*bg_scale
             else:
                 img = spots_scaled + bg*bg_scale
+
+            if self.flux != paths_and_const.FLUX:
+                img = img * (self.flux / paths_and_const.FLUX)
 
             S.D.raw_pixels = flex.double(img.ravel())
             S.D.add_noise()

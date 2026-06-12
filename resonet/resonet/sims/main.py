@@ -6,7 +6,11 @@ def args(use_joblib=False):
     from argparse import ArgumentDefaultsHelpFormatter as arg_formatter
     parser = ArgumentParser(formatter_class=arg_formatter)
     parser.add_argument("outdir", help="path to output folder (will be created if necessary)", type=str)
-    parser.add_argument("--geom", type=str, choices=["eiger", "pilatus", "mar"], help="available detector formats (`eiger`, `pilatus`, or `mar`)", default=None)
+    parser.add_argument("--geom", type=str,
+        choices=["eiger", "pilatus", "mar", "agipd", "jungfrau", "epix10k", "eiger4m"],
+        help="Detector geometry. Single-panel CBF (HDF5 output): eiger, pilatus, mar. "
+             "Multi-panel CXI preset (auto-enables --outfmt cxi): agipd, jungfrau, epix10k, eiger4m.",
+        default=None)
     parser.add_argument("--seed", default=None,
                         help="random number seed. Default value of None will use int(time.time()) . Seed will be offset by MPI rank, so each rank always has a unique seed amongst all ranks.",
                         type=int)
@@ -36,6 +40,10 @@ def args(use_joblib=False):
     parser.add_argument("--randAxis", action="store_true", help="a random axis will be chosen, then, for all simulations, each crystal will be rotated a random amount about that axis. This supercedes twoAxisOnly and axisRotOnly")
     parser.add_argument("--randWave", action="store_true", help="randomize the beam wavelength")
     parser.add_argument("--randScale", action="store_true", help="randomize the crystal domain size")
+    parser.add_argument("--fluxRange", nargs=2, type=float, default=None,
+                        metavar=("MIN_FLUX", "MAX_FLUX"),
+                        help="If provided, per-shot flux is drawn uniformly from [MIN_FLUX, MAX_FLUX] "
+                             "photons/pulse. Default None uses the fixed FLUX constant from paths_and_const.py.")
     parser.add_argument("--axisRotOnly", choices=[0,1,2], type=int, default=None, help="Rotate the crystals about soecified axis (as a control)")
     parser.add_argument("--twoAxisOnly", choices=[0,1,2], type=int, default=None, help="Rotate the crystals about specified axes (as a control) (0=xy, 1=xz, 2=yz)")
     parser.add_argument("--expt", type=str)
@@ -105,7 +113,7 @@ def run(args, seeds, jid, njobs, gvec=None):
     from scipy.ndimage import binary_dilation
     import torch
     
-    from resonet.sims.paths_and_const import PDB_MAP
+    from resonet.sims.paths_and_const import PDB_MAP, MULTI_PANEL_PRESETS
     from resonet.utils.eval_model import to_tens
     from resonet.utils import counter_utils
     from resonet.sims import paths_and_const
@@ -133,6 +141,14 @@ def run(args, seeds, jid, njobs, gvec=None):
                               "There should be 1 filename per line.")
         if jid==0:
             print("Found %d maskfiles" %len(maskfiles))
+
+    if args.geom in MULTI_PANEL_PRESETS:
+        _preset_geomfile, _preset_det_name = MULTI_PANEL_PRESETS[args.geom]
+        args.outfmt = 'cxi'
+        if args.geomfile is None:
+            args.geomfile = _preset_geomfile
+        if args.detector_name is None:
+            args.detector_name = _preset_det_name
 
     _outfmt_cxi = getattr(args, 'outfmt', 'hdf5') == 'cxi'
     if _outfmt_cxi:
@@ -321,6 +337,9 @@ def run(args, seeds, jid, njobs, gvec=None):
                 HS.mask = mask
                 if not args.bgOnly and args.randHits:
                     HS.bg_only = np.random.choice([0, 1])
+                if args.fluxRange is not None:
+                    f1, f2 = args.fluxRange
+                    HS.flux = np.random.uniform(f1, f2)
                 params, spots, imgs, shot_det, shot_beam = HS.simulate(
                     rot_mat=rotMats[i_shot],
                     multi_lattice_chance=args.multiChance,
@@ -514,6 +533,9 @@ def run(args, seeds, jid, njobs, gvec=None):
                 HS.mask = shot_mask
                 if not args.bgOnly and args.randHits:
                     HS.bg_only = np.random.choice([0,1])
+                if args.fluxRange is not None:
+                    f1, f2 = args.fluxRange
+                    HS.flux = np.random.uniform(f1, f2)
 
                 params, spots, imgs, shot_det, shot_beam = HS.simulate(rot_mat=rotMats[i_shot],
                                           multi_lattice_chance=args.multiChance,
