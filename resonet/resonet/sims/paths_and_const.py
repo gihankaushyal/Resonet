@@ -6,6 +6,15 @@ import os
 Some constants and file paths for simulations
 """
 
+_GEOMS_DIR = os.path.join(os.path.dirname(__file__), "geoms")
+
+MULTI_PANEL_PRESETS = {
+    "agipd":    (os.path.join(_GEOMS_DIR, "AGIPD.geom"),    "AGIPD 1M"),
+    "jungfrau": (os.path.join(_GEOMS_DIR, "Jungfrau.geom"), "Jungfrau 4M"),
+    "epix10k":  (os.path.join(_GEOMS_DIR, "Epix10k.geom"),  "ePix10k 2.2M"),
+    "eiger4m":  (os.path.join(_GEOMS_DIR, "Eigar.geom"),    "EIGER 4M"),
+}
+
 # this file contains the P1 amplitudes used to simulate diffraction
 # these files are slow to read: TODO convert and store in high symmetry and use CCTBX
 # to convert to P1

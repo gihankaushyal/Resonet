@@ -1,6 +1,23 @@
 """Parse CrystFEL .geom files and convert to dxtbx Detector objects."""
+import math
 import re
 from typing import Any
+
+
+def _normalize(v: tuple) -> tuple:
+    """Return unit vector; raises ValueError if zero-length."""
+    mag = math.sqrt(sum(c * c for c in v))
+    if mag < 1e-10:
+        raise ValueError(f"Zero-length axis vector: {v}")
+    return tuple(c / mag for c in v)
+
+
+def _orthogonalize(fast: tuple, slow: tuple) -> tuple:
+    """Return (fast_unit, slow_unit) with slow made exactly orthogonal to fast via Gram-Schmidt."""
+    fast = _normalize(fast)
+    dot = sum(f * s for f, s in zip(fast, slow))
+    slow_orth = tuple(s - dot * f for s, f in zip(slow, fast))
+    return fast, _normalize(slow_orth)
 
 
 def _parse_axis(s: str) -> tuple:
@@ -72,9 +89,9 @@ def parse_geom(path: str) -> tuple:
             else:
                 if key in ('clen', 'photon_energy', 'res'):
                     try:
-                        globals_[key] = float(value)
-                    except ValueError:
-                        pass  # dynamic field like /LCLS/photon_energy_eV
+                        globals_[key] = float(value.split()[0])
+                    except (ValueError, IndexError):
+                        pass  # dynamic field like /LCLS/photon_energy_eV or unit suffix
 
     missing_globals = [k for k in ('clen', 'res', 'photon_energy') if k not in globals_]
     if missing_globals:
@@ -110,15 +127,16 @@ def parse_geom(path: str) -> tuple:
     panel_map = []
 
     for idx, p in enumerate(valid_panels):
-        fast_axis = p['fs']
-        slow_axis = p['ss']
+        raw_fast = _normalize(p['fs'])
+        raw_slow = _normalize(p['ss'])
 
-        dot = sum(f * s for f, s in zip(fast_axis, slow_axis))
+        dot = sum(f * s for f, s in zip(raw_fast, raw_slow))
         if abs(dot) > 0.01:
             raise ValueError(
-                f"Panel {p['name']}: fast/slow axes not orthogonal (dot={dot:.4f}). "
-                "Use Plan B (CBF-based) fallback."
+                f"Panel {p['name']}: fast/slow axes not orthogonal (dot={dot:.4f})."
             )
+
+        fast_axis, slow_axis = _orthogonalize(raw_fast, raw_slow)
 
         # CrystFEL origin: pixels from beam center; dxtbx origin: mm from lab origin.
         # CrystFEL z is +downstream; dxtbx z is +upstream (beam travels in -z).
