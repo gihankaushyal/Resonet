@@ -86,7 +86,7 @@ def test_shift_distance_changes_z_component(two_panel_detector):
 
     shifted = shift_distance(two_panel_detector, delta_z)
     new_origin = np.array(shifted[0].get_origin())
-    expected = orig_origin + normal * delta_z
+    expected = orig_origin - normal * delta_z
     np.testing.assert_allclose(new_origin, expected, atol=1e-9)
 
 

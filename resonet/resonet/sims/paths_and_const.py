@@ -42,6 +42,7 @@ LAUE_MODE = False
 PEAK_MODE = False
 BEAM_SIZE_MM = 0.03
 FLUX = 4e11  # photons per pulse
+CALIB_NOISE_PCT = 3  # detector calibration noise (% pixel-to-pixel gain variation)
 XTALSIZE_MM = 0.025
 #CENTER_WINDOW_MM = 100  # if randomizing beam center, vary the center around a box of this edge size
 CENTER_WINDOW_MM = 3  # if randomizing beam center, vary the center around a box of this edge size

@@ -201,7 +201,7 @@ def get_Bfac_img_flat(stol_list, hres=None):
     return reso, Bfac_flat
 
 
-def set_noise(noise_sim, calib_noise_percent=3):
+def set_noise(noise_sim, calib_noise_percent=paths_and_const.CALIB_NOISE_PCT):
     """
 
     :param noise_sim: nanoBragg simulator instance
@@ -259,7 +259,9 @@ def apply_epix_noise(img, t1=80, t2=270,
         if n:
             out[mask] += rng.normal(0, sigma, size=n).astype(np.float32)
     out = np.maximum(out, 0)
-    out[lg] = np.minimum(out[lg], sat_lg)
+    # Clip the full array: lg mask is stale after readout noise, so MG pixels pushed
+    # above sat_lg by noise must also be caught here.
+    np.minimum(out, sat_lg, out=out)
     return out
 
 

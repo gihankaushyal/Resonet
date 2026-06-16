@@ -72,6 +72,7 @@ class Simulator:
         self.epix_gain_thresh = (80, 270) # HG→MG and MG→LG thresholds (photon counts)
         self.epix_noise_sigma = (0.02, 0.023, 0.27)  # readout noise RMS per zone (photon-equiv)
         self.epix_sat_lg = 11000          # LG well-capacity saturation limit (photon counts)
+        self._epix_rng = np.random.default_rng()  # persistent RNG for ePix10k noise; seeded once
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -408,7 +409,7 @@ class Simulator:
             make_sims.set_noise(S.D)
         noise_imgs = []
         all_spots_scaled = []
-        epix_rng = np.random.default_rng() if self.epix_mode else None
+        epix_rng = self._epix_rng if self.epix_mode else None
         for spots in all_spots:
             spots_scaled = Bfac_img*paths_and_const.VOL*spots
             all_spots_scaled.append(spots_scaled)
@@ -427,7 +428,7 @@ class Simulator:
             if self.epix_mode:
                 # ePix10k noise pipeline: 3% calibration variation → apply_epix_noise
                 # (Poisson shot noise + per-pixel gain-zone readout noise)
-                calib = epix_rng.normal(1.0, 0.03, size=img.shape).clip(0).astype(np.float32)
+                calib = epix_rng.normal(1.0, paths_and_const.CALIB_NOISE_PCT / 100, size=img.shape).clip(0).astype(np.float32)
                 noise_img = make_sims.apply_epix_noise(
                     img * calib,
                     t1=self.epix_gain_thresh[0], t2=self.epix_gain_thresh[1],

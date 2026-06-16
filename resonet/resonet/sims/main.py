@@ -280,6 +280,9 @@ def run(args, seeds, jid, njobs, gvec=None):
     HS.xtal_shape = args.xtalShape
     HS.shots_per_example = args.shotsPerEx
     if getattr(args, 'geom', None) == 'epix10k':
+        _t1, _t2 = args.epixGainThresh
+        if _t1 >= _t2:
+            raise ValueError(f"--epixGainThresh T1 ({_t1}) must be < T2 ({_t2}).")
         HS.epix_mode = True
         HS.epix_gain_thresh = args.epixGainThresh
         HS.epix_noise_sigma = args.epixNoiseSigma
