@@ -38,6 +38,10 @@ def args(use_joblib=False):
                         metavar=("HG", "MG", "LG"),
                         help="ePix10k readout noise (photon-equivalent RMS) per gain zone. "
                              "Only active with --geom epix10k. Default: 0.02 0.023 0.27")
+    parser.add_argument("--epixSatLG", type=float, default=11000,
+                        metavar="SAT",
+                        help="ePix10k LG well-capacity saturation limit in photon counts. "
+                             "Pixels above this are clipped. Only active with --geom epix10k. Default: 11000")
     parser.add_argument("--varyBgScale", action="store_true", help="if true, vary background scale by factor in range 0.05-1.5")
     parser.add_argument("--beamStop", action="store_true", help="if true, add a random beamstop mask to each simulated shot")
     parser.add_argument("--randDist", action="store_true", help="randomize the detector distance")
@@ -279,6 +283,7 @@ def run(args, seeds, jid, njobs, gvec=None):
         HS.epix_mode = True
         HS.epix_gain_thresh = args.epixGainThresh
         HS.epix_noise_sigma = args.epixNoiseSigma
+        HS.epix_sat_lg = args.epixSatLG
     if not _outfmt_cxi:
         pixsize = DET[0].get_pixel_size()[0]
 

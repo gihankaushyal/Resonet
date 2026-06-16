@@ -227,10 +227,16 @@ def set_noise(noise_sim, calib_noise_percent=3):
 
 def apply_epix_noise(img, t1=80, t2=270,
                      sigma_hg=0.02, sigma_mg=0.023, sigma_lg=0.27,
+                     sat_lg=11000,
                      rng=None):
     """Per-pixel auto-ranging noise model for ePix10k detector.
 
-    Physical order: Poisson shot noise → gain-zone classification → Gaussian readout noise.
+    Physical order: Poisson shot noise → gain-zone classification →
+    Gaussian readout noise → LG saturation clip.
+
+    t1 and t2 are the HG and MG well-capacity thresholds — pixels exceeding
+    them switch to the next gain mode. sat_lg is the LG well capacity; pixels
+    above it are clipped to sat_lg (saturated).
 
     :param img: noiseless photon-count image (numpy float32 array, any shape)
     :param t1: HG→MG switch threshold in photon counts (default 80)
@@ -238,8 +244,9 @@ def apply_epix_noise(img, t1=80, t2=270,
     :param sigma_hg: readout noise RMS in photon-equivalent for HG zone (default 0.02)
     :param sigma_mg: readout noise RMS in photon-equivalent for MG zone (default 0.023)
     :param sigma_lg: readout noise RMS in photon-equivalent for LG zone (default 0.27)
+    :param sat_lg: LG saturation limit in photon counts (default 11000)
     :param rng: numpy.random.Generator instance (created internally if None)
-    :return: noised image as float32 array, same shape as img, clipped to ≥ 0
+    :return: noised image as float32 array, same shape as img, clipped to [0, sat_lg]
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -251,7 +258,9 @@ def apply_epix_noise(img, t1=80, t2=270,
         n = int(np.sum(mask))
         if n:
             out[mask] += rng.normal(0, sigma, size=n).astype(np.float32)
-    return np.maximum(out, 0)
+    out = np.maximum(out, 0)
+    out[lg] = np.minimum(out[lg], sat_lg)
+    return out
 
 
 def main():

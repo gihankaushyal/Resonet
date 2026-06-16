@@ -71,6 +71,7 @@ class Simulator:
         self.epix_mode = False            # enable ePix10k per-pixel gain-switching noise
         self.epix_gain_thresh = (80, 270) # HG→MG and MG→LG thresholds (photon counts)
         self.epix_noise_sigma = (0.02, 0.023, 0.27)  # readout noise RMS per zone (photon-equiv)
+        self.epix_sat_lg = 11000          # LG well-capacity saturation limit (photon counts)
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -433,6 +434,7 @@ class Simulator:
                     sigma_hg=self.epix_noise_sigma[0],
                     sigma_mg=self.epix_noise_sigma[1],
                     sigma_lg=self.epix_noise_sigma[2],
+                    sat_lg=self.epix_sat_lg,
                     rng=epix_rng,
                 )
             else:
