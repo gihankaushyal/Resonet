@@ -385,6 +385,7 @@ def run(args, seeds, jid, njobs, gvec=None):
                     'hit': float(0 if HS.bg_only else 1),
                     'detector_distance': float(params['detector_distance']),
                     'wavelength': float(params['wavelength']),
+                    'flux': float(params['flux']),
                 }
                 for flat_img in imgs:
                     assert flat_img.size == n_px_expected, (
