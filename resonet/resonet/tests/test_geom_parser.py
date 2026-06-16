@@ -4,7 +4,7 @@ import tempfile
 import pytest
 
 GEOM_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "geoms", "Eigar.geom"
+    os.path.dirname(__file__), "..", "..", "..", "geoms", "Eiger4m.geom"
 )
 
 
@@ -272,6 +272,27 @@ p0a0/max_ss = 63
         f"origin_mm[1]={origin[1]:.6f} expected {expected_y:.6f} "
         "(corner_y must be negated for dxtbx convention)"
     )
+
+
+def test_normalize_zero_vector_raises():
+    """_normalize raises ValueError for a zero-length input vector."""
+    from resonet.sims.geom_parser import _normalize
+    with pytest.raises(ValueError, match="[Zz]ero"):
+        _normalize((0.0, 0.0, 0.0))
+
+
+def test_orthogonalize_parallel_axes_raises():
+    """_orthogonalize raises ValueError when fast and slow are parallel."""
+    from resonet.sims.geom_parser import _orthogonalize
+    with pytest.raises(ValueError, match="parallel"):
+        _orthogonalize((1.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+
+
+def test_parse_axis_no_xyz_token_raises():
+    """_parse_axis raises ValueError when the string has no x/y/z token."""
+    from resonet.sims.geom_parser import _parse_axis
+    with pytest.raises(ValueError):
+        _parse_axis("0.5")
 
 
 def test_comments_ignored(tmp_path):

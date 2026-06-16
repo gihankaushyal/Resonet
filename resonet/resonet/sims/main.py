@@ -9,7 +9,7 @@ def args(use_joblib=False):
     parser.add_argument("--geom", type=str,
         choices=["eiger", "pilatus", "mar", "agipd", "jungfrau", "epix10k", "eiger4m"],
         help="Detector geometry. Single-panel CBF (HDF5 output): eiger, pilatus, mar. "
-             "Multi-panel CXI preset (auto-enables --outfmt cxi): agipd, jungfrau, epix10k, eiger4m.",
+             "Multi-panel CXI preset (output forced to CXI regardless of --outfmt): agipd, jungfrau, epix10k, eiger4m.",
         default=None)
     parser.add_argument("--seed", default=None,
                         help="random number seed. Default value of None will use int(time.time()) . Seed will be offset by MPI rank, so each rank always has a unique seed amongst all ranks.",
@@ -283,10 +283,22 @@ def run(args, seeds, jid, njobs, gvec=None):
         _t1, _t2 = args.epixGainThresh
         if _t1 >= _t2:
             raise ValueError(f"--epixGainThresh T1 ({_t1}) must be < T2 ({_t2}).")
+        if any(s < 0 for s in args.epixNoiseSigma):
+            raise ValueError(f"--epixNoiseSigma values must be non-negative; got {args.epixNoiseSigma}.")
+        if args.epixSatLG <= 0:
+            raise ValueError(f"--epixSatLG must be positive; got {args.epixSatLG}.")
         HS.epix_mode = True
         HS.epix_gain_thresh = args.epixGainThresh
         HS.epix_noise_sigma = args.epixNoiseSigma
         HS.epix_sat_lg = args.epixSatLG
+        HS._epix_rng = np.random.default_rng(seeds[jid])
+    if args.fluxRange is not None:
+        _f1, _f2 = args.fluxRange
+        if _f1 <= 0 or _f2 <= 0:
+            raise ValueError(f"--fluxRange values must be positive; got MIN={_f1}, MAX={_f2}.")
+        if _f1 > _f2:
+            raise ValueError(f"--fluxRange MIN ({_f1}) must be <= MAX ({_f2}).")
+
     if not _outfmt_cxi:
         pixsize = DET[0].get_pixel_size()[0]
 
@@ -341,23 +353,19 @@ def run(args, seeds, jid, njobs, gvec=None):
                 rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
             else:
                 rotMats = Rotation.random(Nshot).as_matrix()
-            if args.fluxRange is not None:
-                _f1, _f2 = args.fluxRange
-                if _f1 <= 0 or _f2 <= 0:
-                    raise ValueError(f"--fluxRange values must be positive; got MIN={_f1}, MAX={_f2}.")
-                if _f1 > _f2:
-                    raise ValueError(f"--fluxRange MIN ({_f1}) must be <= MAX ({_f2}).")
             random_dist = random_wave = None
             if args.randDist:
                 if args.randDistChoice is not None:
                     random_dist = lambda: np.random.choice(args.randDistChoice)
                 else:
                     d1, d2 = args.randDistRange
-                    assert d1 < d2
+                    if d1 >= d2:
+                        raise ValueError(f"--randDistRange: first value ({d1}) must be < second ({d2}).")
                     random_dist = lambda: np.random.uniform(d1, d2)
             if args.randWave:
                 en1, en2 = args.randWaveRange
-                assert en1 < en2
+                if en1 >= en2:
+                    raise ValueError(f"--randWaveRange: first value ({en1}) must be < second ({en2}).")
                 random_wave = lambda: np.random.uniform(en1, en2)
             times = []
             for i_shot in range(Nshot):
@@ -427,8 +435,8 @@ def run(args, seeds, jid, njobs, gvec=None):
                                 if _line.startswith("VmRSS:"):
                                     rss_mb = int(_line.split()[1]) / 1024  # kB → MB
                                     break
-                    except (OSError, ValueError):
-                        pass
+                    except (OSError, ValueError) as _rss_err:
+                        print(f"RANK {jid+1}/{njobs}: /proc/self/status unreadable ({_rss_err}); using ru_maxrss.", flush=True)
                     if rss_mb is None:
                         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                     print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
@@ -508,13 +516,6 @@ def run(args, seeds, jid, njobs, gvec=None):
                 rotMats = Rotation.random(Nshot).as_matrix()
             times = []  # store processing times per shot
 
-            if args.fluxRange is not None:
-                _f1, _f2 = args.fluxRange
-                if _f1 <= 0 or _f2 <= 0:
-                    raise ValueError(f"--fluxRange values must be positive; got MIN={_f1}, MAX={_f2}.")
-                if _f1 > _f2:
-                    raise ValueError(f"--fluxRange MIN ({_f1}) must be <= MAX ({_f2}).")
-
             # random generators
             random_dist = random_wave = None
             if args.randDist:
@@ -522,11 +523,13 @@ def run(args, seeds, jid, njobs, gvec=None):
                     random_dist = lambda: np.random.choice(args.randDistChoice)
                 else:
                     d1,d2 = args.randDistRange
-                    assert d1 < d2
+                    if d1 >= d2:
+                        raise ValueError(f"--randDistRange: first value ({d1}) must be < second ({d2}).")
                     random_dist = lambda: np.random.uniform(d1,d2)
             if args.randWave:
                 en1, en2 = args.randWaveRange
-                assert en1 < en2
+                if en1 >= en2:
+                    raise ValueError(f"--randWaveRange: first value ({en1}) must be < second ({en2}).")
                 random_wave = lambda: np.random.uniform(en1, en2)
 
             for i_shot in range(Nshot):

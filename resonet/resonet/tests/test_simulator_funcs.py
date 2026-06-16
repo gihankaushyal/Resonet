@@ -43,14 +43,17 @@ def test_shift_center_moves_origin_along_slow_axis(two_panel_detector):
 
 
 def test_shift_center_applies_to_all_panels(two_panel_detector):
-    """All panels in a multi-panel detector are shifted, not just the first."""
+    """All panels are shifted by the same lab-frame vector (rigid body)."""
     from resonet.sims.simulator import shift_center
     shifted = shift_center(two_panel_detector, 10.0, 0.0)
     assert len(shifted) == len(two_panel_detector)
+    displacements = []
     for i in range(len(two_panel_detector)):
         orig = np.array(two_panel_detector[i].get_origin())
         new = np.array(shifted[i].get_origin())
         assert not np.allclose(orig, new), f"Panel {i} origin was not changed"
+        displacements.append(new - orig)
+    np.testing.assert_allclose(displacements[0], displacements[1], atol=1e-9)
 
 
 def test_shift_center_zero_is_noop(two_panel_detector):
@@ -121,6 +124,45 @@ def test_shift_distance_zero_is_noop(two_panel_detector):
         orig = np.array(two_panel_detector[i].get_origin())
         new = np.array(shifted[i].get_origin())
         np.testing.assert_allclose(orig, new, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# apply_epix_noise
+# ---------------------------------------------------------------------------
+
+def test_apply_epix_noise_output_shape_and_dtype():
+    """Output has the same shape as input and is float32."""
+    from resonet.sims.make_sims import apply_epix_noise
+    img = np.zeros((64, 128), dtype=np.float32)
+    out = apply_epix_noise(img, rng=np.random.default_rng(0))
+    assert out.shape == img.shape
+    assert out.dtype == np.float32
+
+
+def test_apply_epix_noise_nonnegative():
+    """Output is non-negative even for zero-count input."""
+    from resonet.sims.make_sims import apply_epix_noise
+    img = np.zeros((1000,), dtype=np.float32)
+    out = apply_epix_noise(img, rng=np.random.default_rng(42))
+    assert np.all(out >= 0), f"Found {np.sum(out < 0)} negative pixels"
+
+
+def test_apply_epix_noise_saturation_clip():
+    """Pixels well above sat_lg are clipped exactly to sat_lg."""
+    from resonet.sims.make_sims import apply_epix_noise
+    img = np.full((200,), 50000.0, dtype=np.float32)
+    out = apply_epix_noise(img, sat_lg=11000, rng=np.random.default_rng(7))
+    assert np.max(out) <= 11000, f"max {np.max(out)} exceeds sat_lg=11000"
+    assert np.all(out == 11000), "Expected all high-flux pixels to be saturated"
+
+
+def test_apply_epix_noise_deterministic_with_rng():
+    """Same RNG seed produces identical output."""
+    from resonet.sims.make_sims import apply_epix_noise
+    img = (np.random.default_rng(1).random((128,)) * 500).astype(np.float32)
+    out1 = apply_epix_noise(img, rng=np.random.default_rng(99))
+    out2 = apply_epix_noise(img, rng=np.random.default_rng(99))
+    np.testing.assert_array_equal(out1, out2)
 
 
 # ---------------------------------------------------------------------------

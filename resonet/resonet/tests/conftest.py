@@ -14,7 +14,7 @@ METADATA = {
 }
 
 GEOM_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "geoms", "Eigar.geom"
+    os.path.dirname(__file__), "..", "..", "..", "geoms", "Eiger4m.geom"
 )
 
 # A minimal synthetic 2-panel .geom for unit tests (no file I/O dependency)

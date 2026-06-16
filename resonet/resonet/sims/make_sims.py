@@ -234,9 +234,8 @@ def apply_epix_noise(img, t1=80, t2=270,
     Physical order: Poisson shot noise → gain-zone classification →
     Gaussian readout noise → LG saturation clip.
 
-    t1 and t2 are the HG and MG well-capacity thresholds — pixels exceeding
-    them switch to the next gain mode. sat_lg is the LG well capacity; pixels
-    above it are clipped to sat_lg (saturated).
+    Gain zones: count in [0, t1] → HG; (t1, t2] → MG; > t2 → LG.
+    sat_lg is the LG well capacity; pixels above it are clipped.
 
     :param img: noiseless photon-count image (numpy float32 array, any shape)
     :param t1: HG→MG switch threshold in photon counts (default 80)

@@ -72,7 +72,7 @@ class Simulator:
         self.epix_gain_thresh = (80, 270) # HG→MG and MG→LG thresholds (photon counts)
         self.epix_noise_sigma = (0.02, 0.023, 0.27)  # readout noise RMS per zone (photon-equiv)
         self.epix_sat_lg = 11000          # LG well-capacity saturation limit (photon counts)
-        self._epix_rng = np.random.default_rng()  # persistent RNG for ePix10k noise; seeded once
+        self._epix_rng = np.random.default_rng()  # persistent RNG; seed via HS._epix_rng = np.random.default_rng(seed)
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -426,7 +426,7 @@ class Simulator:
             S.D.flux = self.flux
 
             if self.epix_mode:
-                # ePix10k noise pipeline: 3% calibration variation → apply_epix_noise
+                # ePix10k noise pipeline: CALIB_NOISE_PCT% calibration jitter → apply_epix_noise
                 # (Poisson shot noise + per-pixel gain-zone readout noise)
                 calib = epix_rng.normal(1.0, paths_and_const.CALIB_NOISE_PCT / 100, size=img.shape).clip(0).astype(np.float32)
                 noise_img = make_sims.apply_epix_noise(
