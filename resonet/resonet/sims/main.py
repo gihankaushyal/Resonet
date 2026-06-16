@@ -30,6 +30,14 @@ def args(use_joblib=False):
     parser.add_argument("--verbose", action="store_true", help="if true, show extra output (for mpi rank0 only)")
     parser.add_argument("--noHot", action="store_true", help="dont randomly add hot pixels")
     parser.add_argument("--noBad", action="store_true", help="dont randomly 0-out pixels")
+    parser.add_argument("--epixGainThresh", nargs=2, type=float, default=[80, 270],
+                        metavar=("T1", "T2"),
+                        help="ePix10k gain-switch thresholds in photon counts (HG<=T1<MG<=T2<LG). "
+                             "Only active with --geom epix10k. Default: 80 270")
+    parser.add_argument("--epixNoiseSigma", nargs=3, type=float, default=[0.02, 0.023, 0.27],
+                        metavar=("HG", "MG", "LG"),
+                        help="ePix10k readout noise (photon-equivalent RMS) per gain zone. "
+                             "Only active with --geom epix10k. Default: 0.02 0.023 0.27")
     parser.add_argument("--varyBgScale", action="store_true", help="if true, vary background scale by factor in range 0.05-1.5")
     parser.add_argument("--beamStop", action="store_true", help="if true, add a random beamstop mask to each simulated shot")
     parser.add_argument("--randDist", action="store_true", help="randomize the detector distance")
@@ -267,6 +275,10 @@ def run(args, seeds, jid, njobs, gvec=None):
     HS.bg_only = args.bgOnly
     HS.xtal_shape = args.xtalShape
     HS.shots_per_example = args.shotsPerEx
+    if getattr(args, 'geom', None) == 'epix10k':
+        HS.epix_mode = True
+        HS.epix_gain_thresh = args.epixGainThresh
+        HS.epix_noise_sigma = args.epixNoiseSigma
     if not _outfmt_cxi:
         pixsize = DET[0].get_pixel_size()[0]
 

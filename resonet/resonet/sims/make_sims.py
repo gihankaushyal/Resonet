@@ -225,6 +225,35 @@ def set_noise(noise_sim, calib_noise_percent=3):
     return noise_sim
 
 
+def apply_epix_noise(img, t1=80, t2=270,
+                     sigma_hg=0.02, sigma_mg=0.023, sigma_lg=0.27,
+                     rng=None):
+    """Per-pixel auto-ranging noise model for ePix10k detector.
+
+    Physical order: Poisson shot noise → gain-zone classification → Gaussian readout noise.
+
+    :param img: noiseless photon-count image (numpy float32 array, any shape)
+    :param t1: HG→MG switch threshold in photon counts (default 80)
+    :param t2: MG→LG switch threshold in photon counts (default 270)
+    :param sigma_hg: readout noise RMS in photon-equivalent for HG zone (default 0.02)
+    :param sigma_mg: readout noise RMS in photon-equivalent for MG zone (default 0.023)
+    :param sigma_lg: readout noise RMS in photon-equivalent for LG zone (default 0.27)
+    :param rng: numpy.random.Generator instance (created internally if None)
+    :return: noised image as float32 array, same shape as img, clipped to ≥ 0
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    out = rng.poisson(np.maximum(img, 0)).astype(np.float32)
+    hg = out <= t1
+    mg = (out > t1) & (out <= t2)
+    lg = out > t2
+    for mask, sigma in [(hg, sigma_hg), (mg, sigma_mg), (lg, sigma_lg)]:
+        n = int(np.sum(mask))
+        if n:
+            out[mask] += rng.normal(0, sigma, size=n).astype(np.float32)
+    return np.maximum(out, 0)
+
+
 def main():
     fnames = glob.glob("/mnt/data/s2/blstaff/SOLTIS/AI_PREDICTION/3.15A/*cbf")
     loader = dxtbx.load(fnames[0])
