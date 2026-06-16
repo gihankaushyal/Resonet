@@ -144,11 +144,16 @@ def run(args, seeds, jid, njobs, gvec=None):
 
     if args.geom in MULTI_PANEL_PRESETS:
         _preset_geomfile, _preset_det_name = MULTI_PANEL_PRESETS[args.geom]
+        if args.outfmt == 'hdf5' and jid == 0:
+            print(f"INFO: --geom {args.geom} preset auto-enables --outfmt cxi.", flush=True)
         args.outfmt = 'cxi'
         if args.geomfile is None:
             args.geomfile = _preset_geomfile
         if args.detector_name is None:
             args.detector_name = _preset_det_name
+        if jid == 0:
+            print(f"INFO: preset '--geom {args.geom}' resolved: "
+                  f"geomfile={args.geomfile}, detector_name={args.detector_name}", flush=True)
 
     _outfmt_cxi = getattr(args, 'outfmt', 'hdf5') == 'cxi'
     if _outfmt_cxi:
@@ -316,6 +321,12 @@ def run(args, seeds, jid, njobs, gvec=None):
                 rotMats = Rotation.from_rotvec(rot_vecs, degrees=True).as_matrix()
             else:
                 rotMats = Rotation.random(Nshot).as_matrix()
+            if args.fluxRange is not None:
+                _f1, _f2 = args.fluxRange
+                if _f1 <= 0 or _f2 <= 0:
+                    raise ValueError(f"--fluxRange values must be positive; got MIN={_f1}, MAX={_f2}.")
+                if _f1 > _f2:
+                    raise ValueError(f"--fluxRange MIN ({_f1}) must be <= MAX ({_f2}).")
             random_dist = random_wave = None
             if args.randDist:
                 if args.randDistChoice is not None:
@@ -475,6 +486,13 @@ def run(args, seeds, jid, njobs, gvec=None):
             else:
                 rotMats = Rotation.random(Nshot).as_matrix()
             times = []  # store processing times per shot
+
+            if args.fluxRange is not None:
+                _f1, _f2 = args.fluxRange
+                if _f1 <= 0 or _f2 <= 0:
+                    raise ValueError(f"--fluxRange values must be positive; got MIN={_f1}, MAX={_f2}.")
+                if _f1 > _f2:
+                    raise ValueError(f"--fluxRange MIN ({_f1}) must be <= MAX ({_f2}).")
 
             # random generators
             random_dist = random_wave = None

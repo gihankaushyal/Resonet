@@ -214,7 +214,9 @@ def set_noise(noise_sim, calib_noise_percent=3):
     noise_sim.exposure_s = 1
     noise_sim.calib_seed=0
     noise_sim.seed=0
-    #noise_sim.flux = paths_and_const.FLUX
+    # flux is NOT set here: quantum_gain=1 means raw_pixels are already in photon units,
+    # so Poisson noise is drawn from pixel values directly. Setting flux here would
+    # double-count it and break the per-shot flux scaling in simulator.py.
     noise_sim.adc_offset_adu =0
     noise_sim.detector_psf_kernel_radius_pixels = 5
     noise_sim.detector_psf_fwhm_mm =0

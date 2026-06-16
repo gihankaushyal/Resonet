@@ -15,9 +15,7 @@ export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi
 
 srun --export=ALL resonet-simulate cxi_1k \
     --nshot 1000 \
-    --outfmt cxi \
-    --geomfile /data/bioxfel/user/gihan/Resonet/geoms/Eigar.geom \
-    --detector-name "EIGER 4M" \
+    --geom eiger4m \
     --ngpu=1 \
     --randDist --randDistRange 100 300 \
     --randHits \

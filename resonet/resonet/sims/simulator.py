@@ -411,8 +411,12 @@ class Simulator:
             else:
                 img = spots_scaled + bg*bg_scale
 
-            if self.flux != paths_and_const.FLUX:
-                img = img * (self.flux / paths_and_const.FLUX)
+            # Linear flux rescale: both Bragg spots and background (precomputed at FLUX)
+            # scale identically with photon flux, so rescaling the combined image is correct.
+            flux_scale = self.flux / paths_and_const.FLUX
+            img = img * flux_scale
+            # Keep nanoBragg's calibration-noise model consistent with the rescaled photon level.
+            S.D.flux = self.flux
 
             S.D.raw_pixels = flex.double(img.ravel())
             S.D.add_noise()
@@ -429,13 +433,14 @@ class Simulator:
                       "detector_distance": S.detector[0].get_distance(),
                       "beam_center": S.detector[0].get_beam_centre_px(nb_beam.unit_s0),
                       "Ncells_abc": C.Ncells_abc,
-                      "pdb_name": pdb_name, 
+                      "pdb_name": pdb_name,
                       "mos_spread": mos_spread,
                       "crystal_scale": crystal_scale,
                       "Umat": S.crystal.dxtbx_crystal.get_U(),
                       "pitch_deg": pitch_angle*180/np.pi,
                       "yaw_deg": yaw_angle*180/np.pi,
-                      "wavelen_data": None}
+                      "wavelen_data": None,
+                      "flux": self.flux}
 
         if cbf_name and not (multi_panel and len(shot_det) > 1):
             raw_pix = deepcopy(S.D.raw_pixels)
