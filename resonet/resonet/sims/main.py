@@ -91,12 +91,6 @@ def args(use_joblib=False):
         help="Detector description string written to CXI metadata (e.g. 'EIGER 4M'); required when --outfmt cxi")
     if use_joblib:
         parser.add_argument("--njobs", default=None, type=int, help="number of jobs")
-    args = parser.parse_args()
-
-    if hasattr(args, "h") or hasattr(args, "help"):
-        parser.print_help()
-        sys.exit()
-
     return parser.parse_args()
 
 
@@ -279,6 +273,11 @@ def run(args, seeds, jid, njobs, gvec=None):
     HS.bg_only = args.bgOnly
     HS.xtal_shape = args.xtalShape
     HS.shots_per_example = args.shotsPerEx
+    _EPIX_DEFAULTS = {"epixGainThresh": [80, 270], "epixNoiseSigma": [0.02, 0.023, 0.27], "epixSatLG": 11000}
+    _epix_flags_set = any(getattr(args, k, v) != v for k, v in _EPIX_DEFAULTS.items())
+    if _epix_flags_set and getattr(args, 'geom', None) != 'epix10k' and jid == 0:
+        print("WARNING: --epixGainThresh/--epixNoiseSigma/--epixSatLG are set but --geom epix10k "
+              "was not specified. The ePix10k noise model will NOT be applied.", flush=True)
     if getattr(args, 'geom', None) == 'epix10k':
         _t1, _t2 = args.epixGainThresh
         if _t1 >= _t2:
