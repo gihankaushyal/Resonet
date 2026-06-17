@@ -4,7 +4,7 @@ import tempfile
 import pytest
 
 GEOM_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "geoms", "Eigar.geom"
+    os.path.dirname(__file__), "..", "sims", "geoms", "Eiger4m.geom"
 )
 
 
@@ -248,7 +248,7 @@ p0a0/corner_y = 0.0
 
 
 def test_corner_y_negated_in_origin(tmp_path):
-    """corner_y=20 → origin_mm[1] == -20 * pixel_size_mm (CrystFEL +y up, dxtbx +y down)."""
+    """corner_y=20, corner_x=30 → origin negates y, scales both by pixel_size_mm."""
     from resonet.sims.geom_parser import parse_geom
     content = """\
 clen = 0.300
@@ -256,7 +256,7 @@ res = 10000.0
 photon_energy = 8750
 p0a0/fs = +1.0x +0.0y
 p0a0/ss = +0.0x +1.0y
-p0a0/corner_x = 0.0
+p0a0/corner_x = 30.0
 p0a0/corner_y = 20.0
 p0a0/min_fs = 0
 p0a0/max_fs = 63
@@ -267,11 +267,115 @@ p0a0/max_ss = 63
     detector, panel_map, _ = parse_geom(path)
     origin = detector[0].get_origin()
     pixel_size_mm = 1000.0 / 10000.0
-    expected_y = -20.0 * pixel_size_mm
-    assert abs(origin[1] - expected_y) < 1e-6, (
-        f"origin_mm[1]={origin[1]:.6f} expected {expected_y:.6f} "
+    assert abs(origin[0] - 30.0 * pixel_size_mm) < 1e-6, (
+        f"origin_mm[0]={origin[0]:.6f} expected {30.0 * pixel_size_mm:.6f}"
+    )
+    assert abs(origin[1] - (-20.0 * pixel_size_mm)) < 1e-6, (
+        f"origin_mm[1]={origin[1]:.6f} expected {-20.0 * pixel_size_mm:.6f} "
         "(corner_y must be negated for dxtbx convention)"
     )
+
+
+def test_normalize_zero_vector_raises():
+    """_normalize raises ValueError for a zero-length input vector."""
+    from resonet.sims.geom_parser import _normalize
+    with pytest.raises(ValueError, match="[Zz]ero"):
+        _normalize((0.0, 0.0, 0.0))
+
+
+def test_orthogonalize_parallel_axes_raises():
+    """_orthogonalize raises ValueError when fast and slow are parallel."""
+    from resonet.sims.geom_parser import _orthogonalize
+    with pytest.raises(ValueError, match="parallel"):
+        _orthogonalize((1.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+
+
+def test_parse_axis_no_xyz_token_raises():
+    """_parse_axis raises ValueError when the string has no x/y/z token."""
+    from resonet.sims.geom_parser import _parse_axis
+    with pytest.raises(ValueError):
+        _parse_axis("0.5")
+
+
+def test_dynamic_clen_reference_raises_specific_message(tmp_path):
+    """LCLS dynamic ref produces an error that names the ref value, not just 'missing field'."""
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL.replace('clen = 0.300', 'clen = /LCLS/detector/distance')
+    path = _write_geom(tmp_path, content)
+    with pytest.raises(ValueError, match='dynamic'):
+        parse_geom(path)
+
+
+def test_res_zero_raises(tmp_path):
+    """res = 0 raises ValueError with a message naming the field."""
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL.replace('res = 10000.0', 'res = 0')
+    path = _write_geom(tmp_path, content)
+    with pytest.raises(ValueError, match="res"):
+        parse_geom(path)
+
+
+def test_photon_energy_zero_raises(tmp_path):
+    """photon_energy = 0 raises ValueError."""
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL.replace('photon_energy = 8750', 'photon_energy = 0')
+    path = _write_geom(tmp_path, content)
+    with pytest.raises(ValueError, match="photon_energy"):
+        parse_geom(path)
+
+
+def test_clen_zero_raises(tmp_path):
+    """clen = 0 raises ValueError."""
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL.replace('clen = 0.300', 'clen = 0')
+    path = _write_geom(tmp_path, content)
+    with pytest.raises(ValueError, match="clen"):
+        parse_geom(path)
+
+
+def test_nonnumeric_global_res_raises(tmp_path):
+    """res = abc (non-numeric, non-dynamic) raises ValueError."""
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL.replace('res = 10000.0', 'res = twenty-thousand')
+    path = _write_geom(tmp_path, content)
+    with pytest.raises(ValueError, match="res"):
+        parse_geom(path)
+
+
+def test_empty_geom_file_raises(tmp_path):
+    """An empty .geom file raises ValueError for missing required global fields."""
+    from resonet.sims.geom_parser import parse_geom
+    path = _write_geom(tmp_path, "")
+    with pytest.raises(ValueError, match="missing required"):
+        parse_geom(path)
+
+
+def test_incomplete_panel_warns(tmp_path):
+    """A panel missing required fields emits a warning but valid panels are returned."""
+    import warnings
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL + """\
+p0a2/fs = +1.0x +0.0y
+p0a2/ss = +0.0x +1.0y
+p0a2/corner_x = 50.0
+"""  # missing corner_y, min/max_fs, min/max_ss → incomplete
+    path = _write_geom(tmp_path, content)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        detector, panel_map, _ = parse_geom(path)
+    assert len(panel_map) == 2, "Valid panels should still be returned"
+    assert any("p0a2" in str(w.message) for w in caught), (
+        "Expected a warning naming the skipped panel"
+    )
+
+
+def test_garbled_panel_axis_raises_with_panel_name(tmp_path):
+    """A garbled fs= string in a panel raises ValueError that names the panel."""
+    from resonet.sims.geom_parser import parse_geom
+    content = VALID_TWO_PANEL.replace('p0a0/fs = +1.0x +0.0y', 'p0a0/fs = garbage')
+    path = _write_geom(tmp_path, content)
+    with pytest.raises(ValueError, match="p0a0"):
+        parse_geom(path)
 
 
 def test_comments_ignored(tmp_path):

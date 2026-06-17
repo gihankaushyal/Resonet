@@ -17,7 +17,14 @@ def _orthogonalize(fast: tuple, slow: tuple) -> tuple:
     fast = _normalize(fast)
     dot = sum(f * s for f, s in zip(fast, slow))
     slow_orth = tuple(s - dot * f for s, f in zip(slow, fast))
-    return fast, _normalize(slow_orth)
+    mag = math.sqrt(sum(c * c for c in slow_orth))
+    if mag < 1e-10:
+        raise ValueError(
+            f"Gram-Schmidt projection produced a near-zero slow axis "
+            f"(dot={dot:.6f}, |slow_orth|={mag:.2e}). "
+            "Fast and slow axes are nearly parallel."
+        )
+    return fast, tuple(c / mag for c in slow_orth)
 
 
 def _parse_axis(s: str) -> tuple:
@@ -39,6 +46,11 @@ def _parse_axis(s: str) -> tuple:
             y = v
         else:
             z = v
+    if (x, y, z) == (0.0, 0.0, 0.0):
+        raise ValueError(
+            f"Axis string '{s}' parsed to zero vector — no x/y/z components found. "
+            "Expected format: '-0.999991x +0.004221y', 'x', '-y', etc."
+        )
     return x, y, z
 
 
@@ -59,6 +71,7 @@ def parse_geom(path: str) -> tuple:
     """
     globals_: dict[str, Any] = {}
     panels: dict[str, dict[str, Any]] = {}
+    _dynamic_refs: dict[str, str] = {}
 
     with open(path) as fh:
         for raw_line in fh:
@@ -74,9 +87,15 @@ def parse_geom(path: str) -> tuple:
                 field = field.strip()
                 panels.setdefault(panel_name, {})['name'] = panel_name
                 if field == 'fs':
-                    panels[panel_name]['fs'] = _parse_axis(value)
+                    try:
+                        panels[panel_name]['fs'] = _parse_axis(value)
+                    except ValueError as e:
+                        raise ValueError(f"Geom file '{path}': panel '{panel_name}' fs: {e}") from None
                 elif field == 'ss':
-                    panels[panel_name]['ss'] = _parse_axis(value)
+                    try:
+                        panels[panel_name]['ss'] = _parse_axis(value)
+                    except ValueError as e:
+                        raise ValueError(f"Geom file '{path}': panel '{panel_name}' ss: {e}") from None
                 elif field in ('corner_x', 'corner_y',
                                'min_fs', 'max_fs', 'min_ss', 'max_ss'):
                     try:
@@ -88,34 +107,61 @@ def parse_geom(path: str) -> tuple:
                         ) from None
             else:
                 if key in ('clen', 'photon_energy', 'res'):
-                    try:
-                        globals_[key] = float(value.split()[0])
-                    except (ValueError, IndexError):
-                        pass  # dynamic field like /LCLS/photon_energy_eV or unit suffix
+                    if value.startswith('/'):
+                        _dynamic_refs[key] = value  # LCLS-style HDF5 reference — not supported
+                    else:
+                        try:
+                            globals_[key] = float(value.split()[0])
+                        except (ValueError, IndexError):
+                            raise ValueError(
+                                f"Geom file '{path}': global field '{key}' has unparseable value "
+                                f"'{value}'. Expected a numeric literal (e.g. '{key} = 0.096'). "
+                                "LCLS-style dynamic references ('/LCLS/...') are not supported."
+                            ) from None
 
     missing_globals = [k for k in ('clen', 'res', 'photon_energy') if k not in globals_]
     if missing_globals:
+        dynamic = {k: _dynamic_refs[k] for k in missing_globals if k in _dynamic_refs}
+        if dynamic:
+            raise ValueError(
+                f"Geom file '{path}': global field(s) {list(dynamic.keys())} use LCLS-style "
+                f"dynamic HDF5 references ({dynamic}), which are not supported. "
+                "Provide literal numeric values instead."
+            )
         raise ValueError(
             f"Geom file '{path}' missing required global fields: {missing_globals}. "
             f"Found globals: {list(globals_.keys())}. "
             "Dynamic LCLS-style references (e.g. 'clen = /LCLS/...') are not supported."
         )
 
+    for _field, _val, _unit in [
+        ('res', globals_['res'], 'pixels/metre'),
+        ('photon_energy', globals_['photon_energy'], 'eV'),
+        ('clen', globals_['clen'], 'metres'),
+    ]:
+        if _val <= 0:
+            raise ValueError(
+                f"Geom file '{path}': '{_field}' must be positive ({_unit}); got {_val}."
+            )
+
     required_panel_fields = {'fs', 'ss', 'corner_x', 'corner_y',
                              'min_fs', 'max_fs', 'min_ss', 'max_ss'}
-    valid_panels = [
-        p for p in panels.values()
-        if required_panel_fields.issubset(p.keys())
-    ]
+    incomplete = {
+        name: list(required_panel_fields - set(p.keys()))
+        for name, p in panels.items()
+        if not required_panel_fields.issubset(p.keys())
+    }
+    valid_panels = [p for p in panels.values() if required_panel_fields.issubset(p.keys())]
     if not valid_panels:
-        missing = {
-            name: list(required_panel_fields - set(p.keys()))
-            for name, p in panels.items()
-            if not required_panel_fields.issubset(p.keys())
-        }
         raise ValueError(
             f"No valid panels found in '{path}'. "
-            f"Panels with missing fields: {missing}"
+            f"Panels with missing fields: {incomplete}"
+        )
+    if incomplete:
+        import warnings
+        warnings.warn(
+            f"Geom file '{path}': {len(incomplete)} panel(s) skipped due to missing fields: {incomplete}",
+            stacklevel=3,
         )
     valid_panels.sort(key=_panel_sort_key)
 
@@ -136,7 +182,10 @@ def parse_geom(path: str) -> tuple:
                 f"Panel {p['name']}: fast/slow axes not orthogonal (dot={dot:.4f})."
             )
 
-        fast_axis, slow_axis = _orthogonalize(raw_fast, raw_slow)
+        try:
+            fast_axis, slow_axis = _orthogonalize(raw_fast, raw_slow)
+        except ValueError as e:
+            raise ValueError(f"Panel '{p['name']}': {e}") from None
 
         # CrystFEL origin: pixels from beam center; dxtbx origin: mm from lab origin.
         # CrystFEL z is +downstream; dxtbx z is +upstream (beam travels in -z).

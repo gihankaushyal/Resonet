@@ -9,7 +9,7 @@ def args(use_joblib=False):
     parser.add_argument("--geom", type=str,
         choices=["eiger", "pilatus", "mar", "agipd", "jungfrau", "epix10k", "eiger4m"],
         help="Detector geometry. Single-panel CBF (HDF5 output): eiger, pilatus, mar. "
-             "Multi-panel CXI preset (auto-enables --outfmt cxi): agipd, jungfrau, epix10k, eiger4m.",
+             "Multi-panel CXI preset (output forced to CXI regardless of --outfmt): agipd, jungfrau, epix10k, eiger4m.",
         default=None)
     parser.add_argument("--seed", default=None,
                         help="random number seed. Default value of None will use int(time.time()) . Seed will be offset by MPI rank, so each rank always has a unique seed amongst all ranks.",
@@ -30,6 +30,18 @@ def args(use_joblib=False):
     parser.add_argument("--verbose", action="store_true", help="if true, show extra output (for mpi rank0 only)")
     parser.add_argument("--noHot", action="store_true", help="dont randomly add hot pixels")
     parser.add_argument("--noBad", action="store_true", help="dont randomly 0-out pixels")
+    parser.add_argument("--epixGainThresh", nargs=2, type=float, default=[80, 270],
+                        metavar=("T1", "T2"),
+                        help="ePix10k gain-switch thresholds in photon counts (HG<=T1<MG<=T2<LG). "
+                             "Only active with --geom epix10k. Default: 80 270")
+    parser.add_argument("--epixNoiseSigma", nargs=3, type=float, default=[0.02, 0.023, 0.27],
+                        metavar=("HG", "MG", "LG"),
+                        help="ePix10k readout noise (photon-equivalent RMS) per gain zone. "
+                             "Only active with --geom epix10k. Default: 0.02 0.023 0.27")
+    parser.add_argument("--epixSatLG", type=float, default=11000,
+                        metavar="SAT",
+                        help="ePix10k LG well-capacity saturation limit in photon counts. "
+                             "Pixels above this are clipped. Only active with --geom epix10k. Default: 11000")
     parser.add_argument("--varyBgScale", action="store_true", help="if true, vary background scale by factor in range 0.05-1.5")
     parser.add_argument("--beamStop", action="store_true", help="if true, add a random beamstop mask to each simulated shot")
     parser.add_argument("--randDist", action="store_true", help="randomize the detector distance")
@@ -79,12 +91,6 @@ def args(use_joblib=False):
         help="Detector description string written to CXI metadata (e.g. 'EIGER 4M'); required when --outfmt cxi")
     if use_joblib:
         parser.add_argument("--njobs", default=None, type=int, help="number of jobs")
-    args = parser.parse_args()
-
-    if hasattr(args, "h") or hasattr(args, "help"):
-        parser.print_help()
-        sys.exit()
-
     return parser.parse_args()
 
 
@@ -144,11 +150,16 @@ def run(args, seeds, jid, njobs, gvec=None):
 
     if args.geom in MULTI_PANEL_PRESETS:
         _preset_geomfile, _preset_det_name = MULTI_PANEL_PRESETS[args.geom]
+        if args.outfmt == 'hdf5' and jid == 0:
+            print(f"INFO: --geom {args.geom} preset auto-enables --outfmt cxi.", flush=True)
         args.outfmt = 'cxi'
         if args.geomfile is None:
             args.geomfile = _preset_geomfile
         if args.detector_name is None:
             args.detector_name = _preset_det_name
+        if jid == 0:
+            print(f"INFO: preset '--geom {args.geom}' resolved: "
+                  f"geomfile={args.geomfile}, detector_name={args.detector_name}", flush=True)
 
     _outfmt_cxi = getattr(args, 'outfmt', 'hdf5') == 'cxi'
     if _outfmt_cxi:
@@ -262,6 +273,34 @@ def run(args, seeds, jid, njobs, gvec=None):
     HS.bg_only = args.bgOnly
     HS.xtal_shape = args.xtalShape
     HS.shots_per_example = args.shotsPerEx
+    _EPIX_DEFAULTS = {"epixGainThresh": [80, 270], "epixNoiseSigma": [0.02, 0.023, 0.27], "epixSatLG": 11000}
+    _epix_flags_set = any(getattr(args, k, v) != v for k, v in _EPIX_DEFAULTS.items())
+    if _epix_flags_set and getattr(args, 'geom', None) != 'epix10k':
+        raise ValueError(
+            "--epixGainThresh/--epixNoiseSigma/--epixSatLG were specified but --geom is not 'epix10k'. "
+            "The ePix10k noise model requires --geom epix10k. "
+            "Either remove the epix flags or add '--geom epix10k'."
+        )
+    if getattr(args, 'geom', None) == 'epix10k':
+        _t1, _t2 = args.epixGainThresh
+        if _t1 >= _t2:
+            raise ValueError(f"--epixGainThresh T1 ({_t1}) must be < T2 ({_t2}).")
+        if any(s < 0 for s in args.epixNoiseSigma):
+            raise ValueError(f"--epixNoiseSigma values must be non-negative; got {args.epixNoiseSigma}.")
+        if args.epixSatLG <= 0:
+            raise ValueError(f"--epixSatLG must be positive; got {args.epixSatLG}.")
+        HS.epix_mode = True
+        HS.epix_gain_thresh = args.epixGainThresh
+        HS.epix_noise_sigma = args.epixNoiseSigma
+        HS.epix_sat_lg = args.epixSatLG
+        HS._epix_rng = np.random.default_rng(seeds[jid])
+    if args.fluxRange is not None:
+        _f1, _f2 = args.fluxRange
+        if _f1 <= 0 or _f2 <= 0:
+            raise ValueError(f"--fluxRange values must be positive; got MIN={_f1}, MAX={_f2}.")
+        if _f1 > _f2:
+            raise ValueError(f"--fluxRange MIN ({_f1}) must be <= MAX ({_f2}).")
+
     if not _outfmt_cxi:
         pixsize = DET[0].get_pixel_size()[0]
 
@@ -322,11 +361,13 @@ def run(args, seeds, jid, njobs, gvec=None):
                     random_dist = lambda: np.random.choice(args.randDistChoice)
                 else:
                     d1, d2 = args.randDistRange
-                    assert d1 < d2
+                    if d1 >= d2:
+                        raise ValueError(f"--randDistRange: first value ({d1}) must be < second ({d2}).")
                     random_dist = lambda: np.random.uniform(d1, d2)
             if args.randWave:
                 en1, en2 = args.randWaveRange
-                assert en1 < en2
+                if en1 >= en2:
+                    raise ValueError(f"--randWaveRange: first value ({en1}) must be < second ({en2}).")
                 random_wave = lambda: np.random.uniform(en1, en2)
             times = []
             for i_shot in range(Nshot):
@@ -362,6 +403,7 @@ def run(args, seeds, jid, njobs, gvec=None):
                     'hit': float(0 if HS.bg_only else 1),
                     'detector_distance': float(params['detector_distance']),
                     'wavelength': float(params['wavelength']),
+                    'flux': float(params['flux']),
                 }
                 for flat_img in imgs:
                     assert flat_img.size == n_px_expected, (
@@ -395,8 +437,8 @@ def run(args, seeds, jid, njobs, gvec=None):
                                 if _line.startswith("VmRSS:"):
                                     rss_mb = int(_line.split()[1]) / 1024  # kB → MB
                                     break
-                    except (OSError, ValueError):
-                        pass
+                    except (OSError, ValueError) as _rss_err:
+                        print(f"RANK {jid+1}/{njobs}: /proc/self/status unreadable ({_rss_err}); using ru_maxrss.", flush=True)
                     if rss_mb is None:
                         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                     print(f"RANK {jid+1}/{njobs}: Shot {i_shot+1} RSS={rss_mb:.0f} MB", flush=True)
@@ -483,11 +525,13 @@ def run(args, seeds, jid, njobs, gvec=None):
                     random_dist = lambda: np.random.choice(args.randDistChoice)
                 else:
                     d1,d2 = args.randDistRange
-                    assert d1 < d2
+                    if d1 >= d2:
+                        raise ValueError(f"--randDistRange: first value ({d1}) must be < second ({d2}).")
                     random_dist = lambda: np.random.uniform(d1,d2)
             if args.randWave:
                 en1, en2 = args.randWaveRange
-                assert en1 < en2
+                if en1 >= en2:
+                    raise ValueError(f"--randWaveRange: first value ({en1}) must be < second ({en2}).")
                 random_wave = lambda: np.random.uniform(en1, en2)
 
             for i_shot in range(Nshot):

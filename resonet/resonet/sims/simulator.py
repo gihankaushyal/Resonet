@@ -68,6 +68,11 @@ class Simulator:
         self.shots_per_example = 1  # if provided simulate will return multiple images, each with a different crystal orientation and noise
         self.mask = None  # place holder for numpy-style pixel mask
         self.flux = paths_and_const.FLUX  # per-shot flux; overridable externally
+        self.epix_mode = False            # enable ePix10k per-pixel gain-switching noise
+        self.epix_gain_thresh = (80, 270) # HG→MG and MG→LG thresholds (photon counts)
+        self.epix_noise_sigma = (0.02, 0.023, 0.27)  # readout noise RMS per zone (photon-equiv)
+        self.epix_sat_lg = 11000          # LG well-capacity saturation limit (photon counts)
+        self._epix_rng = np.random.default_rng()  # persistent RNG; seed via HS._epix_rng = np.random.default_rng(seed)
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -400,9 +405,13 @@ class Simulator:
 
         if do_multi_panel:
             S.panel_id = 0  # noise params are geometry-independent; reset for cleanliness
-        make_sims.set_noise(S.D)
+        # epix_mode uses apply_epix_noise instead of nanoBragg's add_noise; set_noise
+        # configures S.D properties that are never read in the epix path.
+        if not self.epix_mode:
+            make_sims.set_noise(S.D)
         noise_imgs = []
         all_spots_scaled = []
+        epix_rng = self._epix_rng if self.epix_mode else None
         for spots in all_spots:
             spots_scaled = Bfac_img*paths_and_const.VOL*spots
             all_spots_scaled.append(spots_scaled)
@@ -411,12 +420,30 @@ class Simulator:
             else:
                 img = spots_scaled + bg*bg_scale
 
-            if self.flux != paths_and_const.FLUX:
-                img = img * (self.flux / paths_and_const.FLUX)
+            # Approximate flux rescale: spots and background were computed at paths_and_const.FLUX;
+            # this scales both linearly but does not re-draw Poisson statistics for the background.
+            flux_scale = self.flux / paths_and_const.FLUX
+            img = img * flux_scale
+            # Used by S.D.add_noise() in the non-epix path; no effect in epix_mode.
+            S.D.flux = self.flux
 
-            S.D.raw_pixels = flex.double(img.ravel())
-            S.D.add_noise()
-            noise_img = S.D.raw_pixels.as_numpy_array().reshape(img_sh)
+            if self.epix_mode:
+                # ePix10k noise pipeline: CALIB_NOISE_PCT% calibration jitter → apply_epix_noise
+                # (Poisson shot noise + per-pixel gain-zone readout noise)
+                calib = epix_rng.normal(1.0, paths_and_const.CALIB_NOISE_PCT / 100, size=img.shape).clip(0).astype(np.float32)
+                noise_img = make_sims.apply_epix_noise(
+                    img * calib,
+                    t1=self.epix_gain_thresh[0], t2=self.epix_gain_thresh[1],
+                    sigma_hg=self.epix_noise_sigma[0],
+                    sigma_mg=self.epix_noise_sigma[1],
+                    sigma_lg=self.epix_noise_sigma[2],
+                    sat_lg=self.epix_sat_lg,
+                    rng=epix_rng,
+                )
+            else:
+                S.D.raw_pixels = flex.double(img.ravel())
+                S.D.add_noise()
+                noise_img = S.D.raw_pixels.as_numpy_array().reshape(img_sh)
             noise_imgs.append(noise_img)
         del Bfac_img, all_spots
 
@@ -429,13 +456,14 @@ class Simulator:
                       "detector_distance": S.detector[0].get_distance(),
                       "beam_center": S.detector[0].get_beam_centre_px(nb_beam.unit_s0),
                       "Ncells_abc": C.Ncells_abc,
-                      "pdb_name": pdb_name, 
+                      "pdb_name": pdb_name,
                       "mos_spread": mos_spread,
                       "crystal_scale": crystal_scale,
                       "Umat": S.crystal.dxtbx_crystal.get_U(),
                       "pitch_deg": pitch_angle*180/np.pi,
                       "yaw_deg": yaw_angle*180/np.pi,
-                      "wavelen_data": None}
+                      "wavelen_data": None,
+                      "flux": self.flux}
 
         if cbf_name and not (multi_panel and len(shot_det) > 1):
             raw_pix = deepcopy(S.D.raw_pixels)
@@ -569,20 +597,34 @@ def reso2radius(reso, DET, BEAM):
 
 
 def shift_center(det, delta_x, delta_y):
-    """Shift beam center for all panels in a detector."""
+    """Shift beam center for all panels in a detector.
+
+    Uses panel 0 as the reference frame so multi-panel detectors translate
+    as a rigid body (same lab-frame vector applied to every panel origin).
+    Per-panel axes were used previously, which sheared multi-panel assemblies
+    and caused dxtbx panel-normal assertion failures for ePix10k.
+    """
     new_det = Detector()
+    ref = det[0]
+    F0 = np.array(ref.to_dict()["fast_axis"])
+    S0 = np.array(ref.to_dict()["slow_axis"])
+    pixsize = ref.get_pixel_size()[0]
+    lab_shift = F0 * pixsize * delta_x + S0 * pixsize * delta_y
     for panel in det:
         dd = panel.to_dict()
-        F = np.array(dd["fast_axis"])
-        S = np.array(dd["slow_axis"])
         O = np.array(dd['origin'])
-        pixsize = panel.get_pixel_size()[0]
-        dd["origin"] = tuple(O + F * pixsize * delta_x + S * pixsize * delta_y)
+        dd["origin"] = tuple(O + lab_shift)
         new_det.add_panel(Panel.from_dict(dd))
     return new_det
 
 def shift_distance(det, delta_z):
-    """Shift detector distance for all panels in a detector."""
+    """Shift detector distance for all panels in a detector.
+
+    Subtracts along the panel normal (O - N*delta_z) so that positive delta_z
+    moves the detector further downstream (more negative z in dxtbx convention).
+    Adding was used previously, which moved panels toward the sample and could
+    push ePix10k panels (default clen=96mm) into positive z, crashing dxtbx.
+    """
     new_det = Detector()
     for panel in det:
         dd = panel.to_dict()
@@ -590,6 +632,6 @@ def shift_distance(det, delta_z):
         S = np.array(dd["slow_axis"])
         O = np.array(dd['origin'])
         Orth = np.cross(F, S)
-        dd["origin"] = tuple(O + Orth * delta_z)
+        dd["origin"] = tuple(O - Orth * delta_z)
         new_det.add_panel(Panel.from_dict(dd))
     return new_det
