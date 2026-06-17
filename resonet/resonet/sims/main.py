@@ -275,9 +275,12 @@ def run(args, seeds, jid, njobs, gvec=None):
     HS.shots_per_example = args.shotsPerEx
     _EPIX_DEFAULTS = {"epixGainThresh": [80, 270], "epixNoiseSigma": [0.02, 0.023, 0.27], "epixSatLG": 11000}
     _epix_flags_set = any(getattr(args, k, v) != v for k, v in _EPIX_DEFAULTS.items())
-    if _epix_flags_set and getattr(args, 'geom', None) != 'epix10k' and jid == 0:
-        print("WARNING: --epixGainThresh/--epixNoiseSigma/--epixSatLG are set but --geom epix10k "
-              "was not specified. The ePix10k noise model will NOT be applied.", flush=True)
+    if _epix_flags_set and getattr(args, 'geom', None) != 'epix10k':
+        raise ValueError(
+            "--epixGainThresh/--epixNoiseSigma/--epixSatLG were specified but --geom is not 'epix10k'. "
+            "The ePix10k noise model requires --geom epix10k. "
+            "Either remove the epix flags or add '--geom epix10k'."
+        )
     if getattr(args, 'geom', None) == 'epix10k':
         _t1, _t2 = args.epixGainThresh
         if _t1 >= _t2:

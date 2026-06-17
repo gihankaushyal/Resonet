@@ -208,8 +208,6 @@ def set_noise(noise_sim, calib_noise_percent=paths_and_const.CALIB_NOISE_PCT):
     :param calib_noise_percent: calibration noise (how much each pixels gain varies)
     :return: nanoBragg simulator instance
     """
-    #noise_sim = nanoBragg(detector=DET, beam=BEAM)
-    #noise_sim.beamsize_mm = paths_and_const.BEAM_SIZE_MM
     noise_sim.detector_calibration_noise_pct = calib_noise_percent
     noise_sim.exposure_s = 1
     noise_sim.calib_seed=0
@@ -247,6 +245,15 @@ def apply_epix_noise(img, t1=80, t2=270,
     :param rng: numpy.random.Generator instance (created internally if None)
     :return: noised image as float32 array, same shape as img, clipped to [0, sat_lg]
     """
+    if t1 >= t2:
+        raise ValueError(f"apply_epix_noise: t1 ({t1}) must be < t2 ({t2}).")
+    if sat_lg <= t2:
+        raise ValueError(f"apply_epix_noise: sat_lg ({sat_lg}) must be > t2 ({t2}).")
+    if any(s < 0 for s in (sigma_hg, sigma_mg, sigma_lg)):
+        raise ValueError(
+            f"apply_epix_noise: all sigma values must be non-negative; "
+            f"got hg={sigma_hg}, mg={sigma_mg}, lg={sigma_lg}."
+        )
     if rng is None:
         rng = np.random.default_rng()
     out = rng.poisson(np.maximum(img, 0)).astype(np.float32)

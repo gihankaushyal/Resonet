@@ -405,6 +405,8 @@ class Simulator:
 
         if do_multi_panel:
             S.panel_id = 0  # noise params are geometry-independent; reset for cleanliness
+        # epix_mode uses apply_epix_noise instead of nanoBragg's add_noise; set_noise
+        # configures S.D properties that are never read in the epix path.
         if not self.epix_mode:
             make_sims.set_noise(S.D)
         noise_imgs = []
@@ -418,11 +420,11 @@ class Simulator:
             else:
                 img = spots_scaled + bg*bg_scale
 
-            # Linear flux rescale: both Bragg spots and background (precomputed at FLUX)
-            # scale identically with photon flux, so rescaling the combined image is correct.
+            # Approximate flux rescale: spots and background were computed at paths_and_const.FLUX;
+            # this scales both linearly but does not re-draw Poisson statistics for the background.
             flux_scale = self.flux / paths_and_const.FLUX
             img = img * flux_scale
-            # Keep nanoBragg's calibration-noise model consistent with the rescaled photon level.
+            # Used by S.D.add_noise() in the non-epix path; no effect in epix_mode.
             S.D.flux = self.flux
 
             if self.epix_mode:
