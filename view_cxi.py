@@ -33,11 +33,15 @@ def parse_geom_panels(geom_path):
             name, field = m.group(1), m.group(2)
             panels.setdefault(name, {})['name'] = name
             if field in ('fs', 'ss'):
-                # parse axis vector e.g. "-0.999991x -0.004221y"
-                mx = re.search(r'([+-]?[0-9.]+)x', val)
-                my = re.search(r'([+-]?[0-9.]+)y', val)
-                panels.setdefault(name, {})[field + '_x'] = float(mx.group(1)) if mx else 0.0
-                panels.setdefault(name, {})[field + '_y'] = float(my.group(1)) if my else 0.0
+                # parse axis vector e.g. "-0.999991x -0.004221y" or bare "-y"
+                def _coeff(m):
+                    if m is None: return 0.0
+                    s = m.group(1)
+                    return 1.0 if s in ('', '+') else (-1.0 if s == '-' else float(s))
+                mx = re.search(r'([+-]?(?:[0-9.]+(?:[eE][+-]?[0-9]+)?)?)x', val)
+                my = re.search(r'([+-]?(?:[0-9.]+(?:[eE][+-]?[0-9]+)?)?)y', val)
+                panels.setdefault(name, {})[field + '_x'] = _coeff(mx)
+                panels.setdefault(name, {})[field + '_y'] = _coeff(my)
             else:
                 panels.setdefault(name, {})[field] = float(val)
 

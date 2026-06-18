@@ -174,7 +174,6 @@ def parse_geom(path: str) -> tuple:
 
     for idx, p in enumerate(valid_panels):
         # Negate y-components: CrystFEL +y=up, dxtbx +y=down.
-        # origin_y is negated below; axis vectors must also have y negated.
         fs, ss = p['fs'], p['ss']
         raw_fast = _normalize((fs[0], -fs[1], fs[2]))
         raw_slow = _normalize((ss[0], -ss[1], ss[2]))

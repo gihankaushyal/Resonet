@@ -623,6 +623,7 @@ def shift_distance(det, delta_z):
     Shifts origin_z by -delta_z so that positive delta_z moves the detector
     further downstream (more negative z in dxtbx where +z is upstream).
     Direct z-shift avoids dependence on panel normal direction.
+    Assumes all panels are approximately beam-normal (fast/slow axes ⊥ z).
     """
     new_det = Detector()
     for panel in det:
