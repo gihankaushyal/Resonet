@@ -173,8 +173,11 @@ def parse_geom(path: str) -> tuple:
     panel_map = []
 
     for idx, p in enumerate(valid_panels):
-        raw_fast = _normalize(p['fs'])
-        raw_slow = _normalize(p['ss'])
+        # Negate y-components: CrystFEL +y=up, dxtbx +y=down.
+        # origin_y is negated below; axis vectors must also have y negated.
+        fs, ss = p['fs'], p['ss']
+        raw_fast = _normalize((fs[0], -fs[1], fs[2]))
+        raw_slow = _normalize((ss[0], -ss[1], ss[2]))
 
         dot = sum(f * s for f, s in zip(raw_fast, raw_slow))
         if abs(dot) > 0.01:

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 def parse_geom_panels(geom_path):
     """Extract panel geometry from a CrystFEL .geom file.
 
-    Returns list of dicts with: corner_x, corner_y, fs_x, fs_y, ss_x, ss_y,
+    Returns list of dicts with: name, corner_x, corner_y, fs_x, fs_y, ss_x, ss_y,
     min_fs, max_fs, min_ss, max_ss.
     """
     panels = {}
@@ -31,6 +31,7 @@ def parse_geom_panels(geom_path):
             if not m:
                 continue
             name, field = m.group(1), m.group(2)
+            panels.setdefault(name, {})['name'] = name
             if field in ('fs', 'ss'):
                 # parse axis vector e.g. "-0.999991x -0.004221y"
                 mx = re.search(r'([+-]?[0-9.]+)x', val)
@@ -49,10 +50,11 @@ def assemble(raw_frame, panels):
     """Assemble panels onto a canvas using full affine placement.
 
     For each pixel (i_fs, i_ss) in a panel:
-        x = corner_x + i_fs * fs_x + i_ss * ss_x
-        y = corner_y + i_fs * fs_y + i_ss * ss_y
+        x =   corner_x + i_fs * fs_x + i_ss * ss_x
+        y = -(corner_y + i_fs * fs_y + i_ss * ss_y)  # negated: CrystFEL +y=up, canvas row 0=top
 
     Handles any axis orientation including flipped/rotated panels.
+    Returns (canvas, x_min, y_min) where x_min/y_min are the canvas origin offsets.
     """
     # First pass: determine canvas bounds
     all_xs, all_ys = [], []
@@ -61,7 +63,7 @@ def assemble(raw_frame, panels):
         ns = int(p['max_ss'] - p['min_ss'] + 1)
         for i_fs, i_ss in [(0, 0), (nf - 1, 0), (0, ns - 1), (nf - 1, ns - 1)]:
             all_xs.append(p['corner_x'] + i_fs * p['fs_x'] + i_ss * p['ss_x'])
-            all_ys.append(p['corner_y'] + i_fs * p['fs_y'] + i_ss * p['ss_y'])
+            all_ys.append(-(p['corner_y'] + i_fs * p['fs_y'] + i_ss * p['ss_y']))
 
     x_min = int(np.floor(min(all_xs)))
     y_min = int(np.floor(min(all_ys)))
@@ -80,21 +82,22 @@ def assemble(raw_frame, panels):
 
         i_fs, i_ss = np.meshgrid(np.arange(nf), np.arange(ns))  # both (ns, nf)
         col = np.round(p['corner_x'] + i_fs * p['fs_x'] + i_ss * p['ss_x']).astype(int) - x_min
-        row = np.round(p['corner_y'] + i_fs * p['fs_y'] + i_ss * p['ss_y']).astype(int) - y_min
+        row = np.round(-(p['corner_y'] + i_fs * p['fs_y'] + i_ss * p['ss_y'])).astype(int) - y_min
 
         mask = (row >= 0) & (row < canvas.shape[0]) & (col >= 0) & (col < canvas.shape[1])
         canvas[row[mask], col[mask]] = patch[mask]
 
-    return canvas
+    return canvas, x_min, y_min
 
 
 # --- CLI args ---
-if len(sys.argv) < 2:
+show_labels = '--labels' in sys.argv
+_positional = [a for a in sys.argv[1:] if not a.startswith('--')]
+if not _positional:
     print(__doc__)
     sys.exit(1)
-
-cxi_path = sys.argv[1]
-geom_path = sys.argv[2] if len(sys.argv) > 2 else None
+cxi_path = _positional[0]
+geom_path = _positional[1] if len(_positional) > 1 else None
 
 h = h5py.File(cxi_path, "r")
 imgs = h["/entry_1/data_1/data"]
@@ -114,13 +117,16 @@ matplotlib.rcParams['keymap.forward'].remove('right')
 
 def get_img(i):
     raw = imgs[i]
-    return assemble(raw, panels) if panels else raw
+    return assemble(raw, panels)[0] if panels else raw
 
 
 fig, ax = plt.subplots(figsize=(8, 8) if panels else (4, 12))
 fig.i = 0
 
-img0 = get_img(0)
+if panels:
+    img0, canvas_x_min, canvas_y_min = assemble(imgs[0], panels)
+else:
+    img0 = imgs[0]
 nonzero = img0[img0 > 0]
 vmax0 = float(np.mean(nonzero) + 3.5 * np.std(nonzero)) if len(nonzero) else 1.0
 im = ax.imshow(img0, vmin=0, vmax=vmax0, cmap="gray_r",
@@ -128,6 +134,15 @@ im = ax.imshow(img0, vmin=0, vmax=vmax0, cmap="gray_r",
 title_sfx = "(assembled)" if panels else "(unassembled)"
 ax.set_title(f"frame 1/{n}  {title_sfx}")
 fig.colorbar(im, ax=ax, fraction=0.02)
+
+if panels and show_labels:
+    for p in panels:
+        nf = int(p['max_fs'] - p['min_fs'] + 1)
+        ns = int(p['max_ss'] - p['min_ss'] + 1)
+        cx = (p['corner_x'] + (nf - 1) / 2 * p['fs_x'] + (ns - 1) / 2 * p['ss_x']) - canvas_x_min
+        ry = (-(p['corner_y'] + (nf - 1) / 2 * p['fs_y'] + (ns - 1) / 2 * p['ss_y'])) - canvas_y_min
+        ax.text(cx, ry, p.get('name', '?'), fontsize=4, color='red',
+                ha='center', va='center', clip_on=True)
 
 
 def press(event):
