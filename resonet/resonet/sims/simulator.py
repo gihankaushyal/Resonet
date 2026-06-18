@@ -620,18 +620,16 @@ def shift_center(det, delta_x, delta_y):
 def shift_distance(det, delta_z):
     """Shift detector distance for all panels in a detector.
 
-    Subtracts along the panel normal (O - N*delta_z) so that positive delta_z
-    moves the detector further downstream (more negative z in dxtbx convention).
-    Adding was used previously, which moved panels toward the sample and could
-    push ePix10k panels (default clen=96mm) into positive z, crashing dxtbx.
+    Shifts origin_z by -delta_z so that positive delta_z moves the detector
+    further downstream (more negative z in dxtbx where +z is upstream).
+    Direct z-shift avoids dependence on panel normal direction.
+    Assumes all panels are approximately beam-normal (fast/slow axes ⊥ z).
     """
     new_det = Detector()
     for panel in det:
         dd = panel.to_dict()
-        F = np.array(dd["fast_axis"])
-        S = np.array(dd["slow_axis"])
-        O = np.array(dd['origin'])
-        Orth = np.cross(F, S)
-        dd["origin"] = tuple(O - Orth * delta_z)
+        O = list(dd['origin'])
+        O[2] -= delta_z
+        dd["origin"] = tuple(O)
         new_det.add_panel(Panel.from_dict(dd))
     return new_det
