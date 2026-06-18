@@ -294,6 +294,135 @@ def test_reso2radius_formula():
     assert abs(result - expected) < 1e-6
 
 
+# ---------------------------------------------------------------------------
+# apply_jungfrau_noise — behavioral tests
+# ---------------------------------------------------------------------------
+
+def test_apply_jungfrau_noise_output_shape_and_dtype():
+    """Output shape matches input; dtype is float32."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.ones((64, 64), dtype=np.float32) * 10.0
+    out = apply_jungfrau_noise(img, rng=np.random.default_rng(0))
+    assert out.shape == img.shape
+    assert out.dtype == np.float32
+
+
+def test_apply_jungfrau_noise_nonnegative():
+    """All output pixels are >= 0."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.zeros((200, 200), dtype=np.float32)
+    out = apply_jungfrau_noise(img, rng=np.random.default_rng(1))
+    assert np.all(out >= 0)
+
+
+def test_apply_jungfrau_noise_saturation_clip():
+    """No output pixel exceeds sat_g2."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.full((500,), 1e6, dtype=np.float32)
+    out = apply_jungfrau_noise(img, sat_g2=3400, rng=np.random.default_rng(2))
+    assert np.all(out <= 3400)
+
+
+def test_apply_jungfrau_noise_default_rng():
+    """rng=None constructs an internal RNG and runs without error."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.ones((10, 10), dtype=np.float32) * 5.0
+    out = apply_jungfrau_noise(img)
+    assert out.shape == (10, 10)
+
+
+def test_apply_jungfrau_noise_t1_ge_t2_raises():
+    """t1 >= t2 raises ValueError."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    with pytest.raises(ValueError, match="t1"):
+        apply_jungfrau_noise(np.ones((10,), dtype=np.float32), t1=500, t2=100)
+
+
+def test_apply_jungfrau_noise_t1_equal_t2_raises():
+    """t1 == t2 raises ValueError."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    with pytest.raises(ValueError, match="t1"):
+        apply_jungfrau_noise(np.ones((10,), dtype=np.float32), t1=200, t2=200)
+
+
+def test_apply_jungfrau_noise_sat_g2_le_t2_raises():
+    """sat_g2 <= t2 raises ValueError."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    with pytest.raises(ValueError, match="sat_g2"):
+        apply_jungfrau_noise(np.ones((10,), dtype=np.float32), t1=34, t2=342, sat_g2=300)
+
+
+def test_apply_jungfrau_noise_negative_sigma_raises():
+    """Negative sigma raises ValueError."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    with pytest.raises(ValueError, match="sigma"):
+        apply_jungfrau_noise(np.ones((10,), dtype=np.float32), sigma_g0=-0.1)
+
+
+def test_apply_jungfrau_noise_g0_zone_receives_sigma_g0():
+    """G0 pixels (<= t1) receive sigma_g0 noise; larger sigma_g0 → more spread."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.full((2000,), 10.0, dtype=np.float32)  # all in G0 zone (t1=34)
+    out_large = apply_jungfrau_noise(img, t1=34, t2=342,
+                                     sigma_g0=30.0, sigma_g1=0.0, sigma_g2=0.0,
+                                     sat_g2=int(1e9), rng=np.random.default_rng(0))
+    out_zero = apply_jungfrau_noise(img, t1=34, t2=342,
+                                    sigma_g0=0.0, sigma_g1=0.0, sigma_g2=0.0,
+                                    sat_g2=int(1e9), rng=np.random.default_rng(0))
+    assert np.std(out_large) > np.std(out_zero) + 5.0
+
+
+def test_apply_jungfrau_noise_g1_zone_receives_sigma_g1():
+    """G1 pixels ((t1, t2]) receive sigma_g1 noise, not sigma_g0 or sigma_g2."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.full((2000,), 100.0, dtype=np.float32)  # all in G1 zone (34 < 100 <= 342)
+    out_large = apply_jungfrau_noise(img, t1=34, t2=342,
+                                     sigma_g0=0.0, sigma_g1=30.0, sigma_g2=0.0,
+                                     sat_g2=int(1e9), rng=np.random.default_rng(0))
+    out_zero = apply_jungfrau_noise(img, t1=34, t2=342,
+                                    sigma_g0=0.0, sigma_g1=0.0, sigma_g2=0.0,
+                                    sat_g2=int(1e9), rng=np.random.default_rng(0))
+    assert np.std(out_large) > np.std(out_zero) + 5.0
+
+
+def test_apply_jungfrau_noise_g2_zone_receives_sigma_g2():
+    """G2 pixels (> t2) receive sigma_g2 noise, not sigma_g0 or sigma_g1."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.full((2000,), 500.0, dtype=np.float32)  # all in G2 zone (t2=342)
+    out_large = apply_jungfrau_noise(img, t1=34, t2=342,
+                                     sigma_g0=0.0, sigma_g1=0.0, sigma_g2=30.0,
+                                     sat_g2=int(1e9), rng=np.random.default_rng(0))
+    out_zero = apply_jungfrau_noise(img, t1=34, t2=342,
+                                    sigma_g0=0.0, sigma_g1=0.0, sigma_g2=0.0,
+                                    sat_g2=int(1e9), rng=np.random.default_rng(0))
+    assert np.std(out_large) > np.std(out_zero) + 5.0, (
+        f"sigma_g2=30 std={np.std(out_large):.2f} not significantly > sigma_g2=0 std={np.std(out_zero):.2f}"
+    )
+
+
+def test_apply_jungfrau_noise_explicit_thresholds():
+    """Custom t1, t2 correctly shift zone boundaries."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    rng = np.random.default_rng(7)
+    # With t1=200, t2=400: img=150 is in G0; with sigma_g0=50 → large spread
+    img = np.full((1000,), 150.0, dtype=np.float32)
+    out = apply_jungfrau_noise(img, t1=200, t2=400,
+                               sigma_g0=50.0, sigma_g1=0.0, sigma_g2=0.0,
+                               sat_g2=int(1e9), rng=rng)
+    assert np.std(out) > 10.0, "Custom t1=200 should place img=150 in G0 zone with large sigma_g0"
+
+
+def test_apply_jungfrau_noise_deterministic_with_rng():
+    """Same RNG seed produces identical output."""
+    from resonet.sims.make_sims import apply_jungfrau_noise
+    img = np.random.default_rng(42).random((100, 100)).astype(np.float32) * 50
+    out1 = apply_jungfrau_noise(img, rng=np.random.default_rng(99))
+    out2 = apply_jungfrau_noise(img, rng=np.random.default_rng(99))
+    np.testing.assert_array_equal(out1, out2)
+
+
+# ---------------------------------------------------------------------------
+
 def test_reso2radius_high_reso_gives_large_radius():
     """Higher resolution (small d-spacing) → larger pixel radius."""
     from resonet.sims.simulator import reso2radius

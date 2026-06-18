@@ -271,6 +271,55 @@ def apply_epix_noise(img, t1=80, t2=270,
     return out
 
 
+def apply_jungfrau_noise(img, t1=34, t2=342,
+                         sigma_g0=0.2, sigma_g1=1.5, sigma_g2=15.0,
+                         sat_g2=3400,
+                         rng=None):
+    """Per-pixel auto-ranging noise model for Jungfrau detector.
+
+    Physical order: Poisson shot noise → gain-zone classification →
+    Gaussian readout noise → floor clip to 0 → G2 saturation clip.
+
+    Gain zones: count in [0, t1] → G0; (t1, t2] → G1; > t2 → G2.
+    sat_g2 is the G2 ADC saturation in photon counts; pixels above it are clipped.
+
+    Defaults derived from Jungfrau 4M at ~12 keV: G0 gain 478.6 ADU/photon,
+    14-bit ADC (max 16384), 10× gain steps between modes (values rounded).
+
+    :param img: noiseless photon-count image (numpy float32 array, any shape)
+    :param t1: G0→G1 switch threshold in photon counts (default 34)
+    :param t2: G1→G2 switch threshold in photon counts (default 342)
+    :param sigma_g0: readout noise RMS in photon-equivalent for G0 zone (default 0.2)
+    :param sigma_g1: readout noise RMS in photon-equivalent for G1 zone (default 1.5)
+    :param sigma_g2: readout noise RMS in photon-equivalent for G2 zone (default 15.0)
+    :param sat_g2: G2 ADC saturation in photon counts (default 3400)
+    :param rng: numpy.random.Generator instance (created internally if None)
+    :return: noised image as float32 array, same shape as img, clipped to [0, sat_g2]
+    """
+    if t1 >= t2:
+        raise ValueError(f"apply_jungfrau_noise: t1 ({t1}) must be < t2 ({t2}).")
+    if sat_g2 <= t2:
+        raise ValueError(f"apply_jungfrau_noise: sat_g2 ({sat_g2}) must be > t2 ({t2}).")
+    if any(s < 0 for s in (sigma_g0, sigma_g1, sigma_g2)):
+        raise ValueError(
+            f"apply_jungfrau_noise: all sigma values must be non-negative; "
+            f"got g0={sigma_g0}, g1={sigma_g1}, g2={sigma_g2}."
+        )
+    if rng is None:
+        rng = np.random.default_rng()
+    out = rng.poisson(np.maximum(img, 0)).astype(np.float32)
+    g0 = out <= t1
+    g1 = (out > t1) & (out <= t2)
+    g2 = out > t2
+    for mask, sigma in [(g0, sigma_g0), (g1, sigma_g1), (g2, sigma_g2)]:
+        n = int(np.sum(mask))
+        if n:
+            out[mask] += rng.normal(0, sigma, size=n).astype(np.float32)
+    out = np.maximum(out, 0)
+    np.minimum(out, sat_g2, out=out)
+    return out
+
+
 def main():
     fnames = glob.glob("/mnt/data/s2/blstaff/SOLTIS/AI_PREDICTION/3.15A/*cbf")
     loader = dxtbx.load(fnames[0])
