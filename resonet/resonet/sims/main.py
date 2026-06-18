@@ -42,6 +42,18 @@ def args(use_joblib=False):
                         metavar="SAT",
                         help="ePix10k LG well-capacity saturation limit in photon counts. "
                              "Pixels above this are clipped. Only active with --geom epix10k. Default: 11000")
+    parser.add_argument("--jungfrauGainThresh", nargs=2, type=float, default=[34, 342],
+                        metavar=("T1", "T2"),
+                        help="Jungfrau G0→G1 and G1→G2 thresholds in photon counts. "
+                             "Only active with --geom jungfrau. Default: 34 342")
+    parser.add_argument("--jungfrauNoiseSigma", nargs=3, type=float, default=[0.2, 1.5, 15.0],
+                        metavar=("G0", "G1", "G2"),
+                        help="Jungfrau readout noise (photon-equivalent RMS) per gain zone. "
+                             "Only active with --geom jungfrau. Default: 0.2 1.5 15.0")
+    parser.add_argument("--jungfrauSatG2", type=float, default=3400,
+                        metavar="SAT",
+                        help="Jungfrau G2 ADC saturation limit in photon counts. "
+                             "Pixels above this are clipped. Only active with --geom jungfrau. Default: 3400")
     parser.add_argument("--varyBgScale", action="store_true", help="if true, vary background scale by factor in range 0.05-1.5")
     parser.add_argument("--beamStop", action="store_true", help="if true, add a random beamstop mask to each simulated shot")
     parser.add_argument("--randDist", action="store_true", help="randomize the detector distance")
@@ -294,6 +306,31 @@ def run(args, seeds, jid, njobs, gvec=None):
         HS.epix_noise_sigma = args.epixNoiseSigma
         HS.epix_sat_lg = args.epixSatLG
         HS._epix_rng = np.random.default_rng(seeds[jid])
+    _jungfrau_argv_flags = any(
+        f'--{flag}' in sys.argv
+        for flag in ('jungfrauGainThresh', 'jungfrauNoiseSigma', 'jungfrauSatG2')
+    )
+    if _jungfrau_argv_flags and getattr(args, 'geom', None) != 'jungfrau':
+        raise ValueError(
+            "--jungfrauGainThresh/--jungfrauNoiseSigma/--jungfrauSatG2 were specified but --geom is not 'jungfrau'. "
+            "The Jungfrau noise model requires --geom jungfrau. "
+            "Either remove the jungfrau flags or add '--geom jungfrau'."
+        )
+    if getattr(args, 'geom', None) == 'jungfrau':
+        _t1, _t2 = args.jungfrauGainThresh
+        if _t1 >= _t2:
+            raise ValueError(f"--jungfrauGainThresh T1 ({_t1}) must be < T2 ({_t2}).")
+        if any(s < 0 for s in args.jungfrauNoiseSigma):
+            raise ValueError(f"--jungfrauNoiseSigma values must be non-negative; got {args.jungfrauNoiseSigma}.")
+        if args.jungfrauSatG2 <= 0:
+            raise ValueError(f"--jungfrauSatG2 must be positive; got {args.jungfrauSatG2}.")
+        if args.jungfrauSatG2 <= _t2:
+            raise ValueError(f"--jungfrauSatG2 ({args.jungfrauSatG2}) must be > T2 ({_t2}).")
+        HS.jungfrau_mode = True
+        HS.jungfrau_gain_thresh = args.jungfrauGainThresh
+        HS.jungfrau_noise_sigma = args.jungfrauNoiseSigma
+        HS.jungfrau_sat_g2 = args.jungfrauSatG2
+        HS._jungfrau_rng = np.random.default_rng(seeds[jid])
     if args.fluxRange is not None:
         _f1, _f2 = args.fluxRange
         if _f1 <= 0 or _f2 <= 0:

@@ -73,6 +73,11 @@ class Simulator:
         self.epix_noise_sigma = (0.02, 0.023, 0.27)  # readout noise RMS per zone (photon-equiv)
         self.epix_sat_lg = 11000          # LG well-capacity saturation limit (photon counts)
         self._epix_rng = np.random.default_rng()  # persistent RNG; seed via HS._epix_rng = np.random.default_rng(seed)
+        self.jungfrau_mode = False            # enable Jungfrau per-pixel gain-switching noise
+        self.jungfrau_gain_thresh = (34, 342) # G0→G1 and G1→G2 thresholds (photon counts)
+        self.jungfrau_noise_sigma = (0.2, 1.5, 15.0)  # readout noise RMS per zone (photon-equiv)
+        self.jungfrau_sat_g2 = 3400           # G2 ADC saturation limit (photon counts)
+        self._jungfrau_rng = np.random.default_rng()  # persistent RNG; seed via HS._jungfrau_rng = np.random.default_rng(seed)
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -405,9 +410,9 @@ class Simulator:
 
         if do_multi_panel:
             S.panel_id = 0  # noise params are geometry-independent; reset for cleanliness
-        # epix_mode uses apply_epix_noise instead of nanoBragg's add_noise; set_noise
-        # configures S.D properties that are never read in the epix path.
-        if not self.epix_mode:
+        # epix_mode and jungfrau_mode use their own noise pipelines instead of nanoBragg's
+        # add_noise; set_noise configures S.D properties that are never read in those paths.
+        if not self.epix_mode and not self.jungfrau_mode:
             make_sims.set_noise(S.D)
         noise_imgs = []
         all_spots_scaled = []
@@ -439,6 +444,20 @@ class Simulator:
                     sigma_lg=self.epix_noise_sigma[2],
                     sat_lg=self.epix_sat_lg,
                     rng=epix_rng,
+                )
+            elif self.jungfrau_mode:
+                # Jungfrau noise pipeline: CALIB_NOISE_PCT% calibration jitter → apply_jungfrau_noise
+                # (Poisson shot noise + per-pixel G0/G1/G2 gain-zone readout noise)
+                jungfrau_rng = self._jungfrau_rng
+                calib = jungfrau_rng.normal(1.0, paths_and_const.CALIB_NOISE_PCT / 100, size=img.shape).clip(0).astype(np.float32)
+                noise_img = make_sims.apply_jungfrau_noise(
+                    img * calib,
+                    t1=self.jungfrau_gain_thresh[0], t2=self.jungfrau_gain_thresh[1],
+                    sigma_g0=self.jungfrau_noise_sigma[0],
+                    sigma_g1=self.jungfrau_noise_sigma[1],
+                    sigma_g2=self.jungfrau_noise_sigma[2],
+                    sat_g2=self.jungfrau_sat_g2,
+                    rng=jungfrau_rng,
                 )
             else:
                 S.D.raw_pixels = flex.double(img.ravel())
