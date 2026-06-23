@@ -320,6 +320,69 @@ def apply_jungfrau_noise(img, t1=34, t2=342,
     return out
 
 
+def apply_agipd_noise(img, t1=65, t2=2000,
+                      adu_hg=64, adu_mg=8, adu_lg=1,
+                      sigma_hg=7.0, sigma_mg=3.0, sigma_lg=1.5,
+                      rng=None):
+    """Per-pixel auto-ranging noise model for AGIPD 1M detector.
+
+    Physical order: Poisson shot noise → gain-zone classification →
+    ADU conversion (multiply by zone gain) → Gaussian readout noise →
+    floor clip to 0.
+
+    Unlike apply_epix_noise/apply_jungfrau_noise, output is in ADU (not
+    photon-equivalent) because AGIPD has large gain differences between zones.
+
+    Gain zones (threshold-based, per pixel):
+      HG (high gain):   photons ≤ t1   → adu_hg ADU/photon, sigma_hg ADU readout
+      MG (medium gain): t1 < photons ≤ t2 → adu_mg ADU/photon, sigma_mg ADU readout
+      LG (low gain):    photons > t2   → adu_lg ADU/photon,  sigma_lg ADU readout
+
+    Defaults from AGIPD 1M at ~9.4 keV:
+      HG→MG threshold: 65 photons (midpoint of 50–80 ph range at 12.4 keV)
+      MG→LG threshold: 2000 photons
+      HG gain: 64 ADU/photon, σ_read ≈ 7 ADU (from 350 e⁻ r.m.s. noise floor)
+      MG gain: 8 ADU/photon,  σ_read ≈ 3 ADU (literature approximation)
+      LG gain: 1 ADU/photon,  σ_read ≈ 1.5 ADU (literature approximation)
+
+    :param img: noiseless photon-count array (numpy float32, any shape)
+    :param t1: HG→MG switch threshold in photon counts (default 65)
+    :param t2: MG→LG switch threshold in photon counts (default 2000)
+    :param adu_hg: ADU per photon for HG zone (default 64)
+    :param adu_mg: ADU per photon for MG zone (default 8)
+    :param adu_lg: ADU per photon for LG zone (default 1)
+    :param sigma_hg: readout noise RMS in ADU for HG zone (default 7.0)
+    :param sigma_mg: readout noise RMS in ADU for MG zone (default 3.0)
+    :param sigma_lg: readout noise RMS in ADU for LG zone (default 1.5)
+    :param rng: numpy.random.Generator instance (created internally if None)
+    :return: noised image as float32 array in ADU, same shape as img, clipped to [0, ∞)
+    """
+    if t1 >= t2:
+        raise ValueError(f"apply_agipd_noise: t1 ({t1}) must be < t2 ({t2}).")
+    if any(s < 0 for s in (sigma_hg, sigma_mg, sigma_lg)):
+        raise ValueError(
+            f"apply_agipd_noise: all sigma values must be non-negative; "
+            f"got hg={sigma_hg}, mg={sigma_mg}, lg={sigma_lg}."
+        )
+    if rng is None:
+        rng = np.random.default_rng()
+    out = rng.poisson(np.maximum(img, 0)).astype(np.float32)
+    hg = out <= t1
+    mg = (out > t1) & (out <= t2)
+    lg = out > t2
+    # Convert to ADU per zone
+    out[hg] *= adu_hg
+    out[mg] *= adu_mg
+    out[lg] *= adu_lg
+    # Add Gaussian readout noise in ADU
+    for mask, sigma in [(hg, sigma_hg), (mg, sigma_mg), (lg, sigma_lg)]:
+        n = int(np.sum(mask))
+        if n:
+            out[mask] += rng.normal(0, sigma, size=n).astype(np.float32)
+    out = np.maximum(out, 0)
+    return out
+
+
 def main():
     fnames = glob.glob("/mnt/data/s2/blstaff/SOLTIS/AI_PREDICTION/3.15A/*cbf")
     loader = dxtbx.load(fnames[0])
