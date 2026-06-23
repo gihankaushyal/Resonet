@@ -216,8 +216,19 @@ def run(args, seeds, jid, njobs, gvec=None):
         from resonet.sims.geom_parser import parse_geom
         from resonet.sims.cxi_writer import CXIWriter
         _geom_det, _panel_map, _geom_globals = parse_geom(args.geomfile)
+        if not _panel_map:
+            raise ValueError(
+                f"Geom file '{args.geomfile}' contains no panel definitions. "
+                "Check that the file is a valid CrystFEL geometry file."
+            )
         DET = _geom_det
         _module_groups = _group_by_module(_panel_map)
+        # Build pixel offsets once; the 3D path derives a name-keyed dict from it.
+        _pixel_offsets = []
+        _offset = 0
+        for pm in _panel_map:
+            _pixel_offsets.append(_offset)
+            _offset += pm['n_fast'] * pm['n_slow']
         if _module_groups is not None:
             _n_modules = len(_module_groups)
             _first_mod = _module_groups[min(_module_groups.keys())]
@@ -234,27 +245,24 @@ def run(args, seeds, jid, njobs, gvec=None):
                         "module-local coordinates. Only module-local coordinate geom files "
                         "are supported for 3D CXI output."
                     )
+                for pm in _mod_panels:
+                    if pm['min_ss'] != 0 or pm['min_fs'] != 0:
+                        raise ValueError(
+                            f"Panel '{pm['name']}' in module {_mod_key} has "
+                            f"min_ss={pm['min_ss']}, min_fs={pm['min_fs']} (expected 0,0). "
+                            "AGIPD 3D CXI requires module-local coordinates starting at (0,0)."
+                        )
             _frame_shape = (_n_modules, _ss_per_mod, _fs_per_mod)
             xdim, ydim = _fs_per_mod, _ss_per_mod
             mask = np.ones((_ss_per_mod, _fs_per_mod), bool)
-            # Build name→pixel_offset map for fast lookup during assembly
-            _panel_pix_offset = {}
-            _offset = 0
-            for pm in _panel_map:
-                _panel_pix_offset[pm['name']] = _offset
-                _offset += pm['n_fast'] * pm['n_slow']
+            # Derive name→offset map from _pixel_offsets; iteration order matches _panel_map.
+            _panel_pix_offset = {pm['name']: off for pm, off in zip(_panel_map, _pixel_offsets)}
         else:
             _n_ss = max(pm['max_ss'] for pm in _panel_map) + 1
             _n_fs = max(pm['max_fs'] for pm in _panel_map) + 1
             _frame_shape = (_n_ss, _n_fs)
             xdim, ydim = _n_fs, _n_ss
             mask = np.ones((_n_ss, _n_fs), bool)
-        pixsize = 1000.0 / _geom_globals['res']
-        _pixel_offsets = []
-        _offset = 0
-        for pm in _panel_map:
-            _pixel_offsets.append(_offset)
-            _offset += pm['n_fast'] * pm['n_slow']
         _wavelength_m = 1239.84193e-9 / _geom_globals['photon_energy']
         _cxi_meta = {
             'detector_name': args.detector_name,

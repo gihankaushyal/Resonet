@@ -338,7 +338,7 @@ def apply_agipd_noise(img, t1=65, t2=2000,
       MG (medium gain): t1 < photons ≤ t2 → adu_mg ADU/photon, sigma_mg ADU readout
       LG (low gain):    photons > t2   → adu_lg ADU/photon,  sigma_lg ADU readout
 
-    Defaults from AGIPD 1M at ~9.4 keV:
+    Defaults from AGIPD 1M at 12.4 keV:
       HG→MG threshold: 65 photons (midpoint of 50–80 ph range at 12.4 keV)
       MG→LG threshold: 2000 photons
       HG gain: 64 ADU/photon, σ_read ≈ 7 ADU (from 350 e⁻ r.m.s. noise floor)
@@ -365,19 +365,19 @@ def apply_agipd_noise(img, t1=65, t2=2000,
             f"got hg={sigma_hg}, mg={sigma_mg}, lg={sigma_lg}."
         )
     # No sat_* parameter: ADU output is clipped to uint16 in main.py downstream.
-    # Unlike apply_epix_noise/apply_jungfrau_noise, max ADU values (HG: ~4160,
-    # LG: ~65k) stay well within uint16 range, so no in-function saturation is needed.
+    # Max ADU per zone (default gains): HG: 65*64=4160, MG: 2000*8=16000,
+    # LG: unbounded photons but adu_lg=1 so ADU==photon count; values >65535 are clipped
+    # downstream. apply_epix/jungfrau_noise include an in-function sat clip because their
+    # LG/G2 gain factors can produce ADU values that greatly exceed uint16.
     if rng is None:
         rng = np.random.default_rng()
     out = rng.poisson(np.maximum(img, 0)).astype(np.float32)
     hg = out <= t1
     mg = (out > t1) & (out <= t2)
     lg = out > t2
-    # Convert to ADU per zone
     out[hg] *= adu_hg
     out[mg] *= adu_mg
     out[lg] *= adu_lg
-    # Add Gaussian readout noise in ADU
     for mask, sigma in [(hg, sigma_hg), (mg, sigma_mg), (lg, sigma_lg)]:
         n = int(np.sum(mask))
         if n:
