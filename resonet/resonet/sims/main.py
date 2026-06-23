@@ -212,8 +212,20 @@ def run(args, seeds, jid, njobs, gvec=None):
         _module_groups = _group_by_module(_panel_map)
         if _module_groups is not None:
             _n_modules = len(_module_groups)
-            _ss_per_mod = max(pm['max_ss'] for pm in _module_groups[0]) + 1
-            _fs_per_mod = max(pm['max_fs'] for pm in _module_groups[0]) + 1
+            _first_mod = _module_groups[min(_module_groups.keys())]
+            _ss_per_mod = max(pm['max_ss'] for pm in _first_mod) + 1
+            _fs_per_mod = max(pm['max_fs'] for pm in _first_mod) + 1
+            for _mod_key, _mod_panels in _module_groups.items():
+                _mod_ss = max(pm['max_ss'] for pm in _mod_panels) + 1
+                _mod_fs = max(pm['max_fs'] for pm in _mod_panels) + 1
+                if _mod_ss != _ss_per_mod or _mod_fs != _fs_per_mod:
+                    raise ValueError(
+                        f"Module {_mod_key} has extent ({_mod_ss}, {_mod_fs}) but module "
+                        f"{min(_module_groups.keys())} has ({_ss_per_mod}, {_fs_per_mod}). "
+                        "The geom file appears to use global coordinates rather than "
+                        "module-local coordinates. Only module-local coordinate geom files "
+                        "are supported for 3D CXI output."
+                    )
             _frame_shape = (_n_modules, _ss_per_mod, _fs_per_mod)
             xdim, ydim = _fs_per_mod, _ss_per_mod
             mask = np.ones((_ss_per_mod, _fs_per_mod), bool)
