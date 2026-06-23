@@ -245,13 +245,14 @@ def run(args, seeds, jid, njobs, gvec=None):
                         "module-local coordinates. Only module-local coordinate geom files "
                         "are supported for 3D CXI output."
                     )
-                for pm in _mod_panels:
-                    if pm['min_ss'] != 0 or pm['min_fs'] != 0:
-                        raise ValueError(
-                            f"Panel '{pm['name']}' in module {_mod_key} has "
-                            f"min_ss={pm['min_ss']}, min_fs={pm['min_fs']} (expected 0,0). "
-                            "AGIPD 3D CXI requires module-local coordinates starting at (0,0)."
-                        )
+                _mod_min_ss = min(pm['min_ss'] for pm in _mod_panels)
+                _mod_min_fs = min(pm['min_fs'] for pm in _mod_panels)
+                if _mod_min_ss != 0 or _mod_min_fs != 0:
+                    raise ValueError(
+                        f"Module {_mod_key}: first panel starts at "
+                        f"(min_ss={_mod_min_ss}, min_fs={_mod_min_fs}), expected (0, 0). "
+                        "AGIPD 3D CXI requires module-local coordinates starting at (0,0)."
+                    )
             _frame_shape = (_n_modules, _ss_per_mod, _fs_per_mod)
             xdim, ydim = _fs_per_mod, _ss_per_mod
             mask = np.ones((_ss_per_mod, _fs_per_mod), bool)

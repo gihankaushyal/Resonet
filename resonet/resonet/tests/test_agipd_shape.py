@@ -171,7 +171,7 @@ def test_module_local_coord_validation_raises_on_global_coords():
 
 
 def test_module_local_coord_validation_raises_on_nonzero_min():
-    """3D path raises ValueError when a panel has min_ss != 0 (off-by-one in geom)."""
+    """3D path raises ValueError when a module's first panel has min_ss != 0."""
     from resonet.sims.main import _group_by_module
     panel_map = [
         {'name': 'p0a0', 'min_ss': 1, 'max_ss': 64, 'min_fs': 0, 'max_fs': 127, 'n_fast': 128, 'n_slow': 64},
@@ -181,13 +181,14 @@ def test_module_local_coord_validation_raises_on_nonzero_min():
     assert groups is not None
     with pytest.raises(ValueError, match="min_ss"):
         for mod_key, mod_panels in groups.items():
-            for pm in mod_panels:
-                if pm['min_ss'] != 0 or pm['min_fs'] != 0:
-                    raise ValueError(
-                        f"Panel '{pm['name']}' in module {mod_key} has "
-                        f"min_ss={pm['min_ss']}, min_fs={pm['min_fs']} (expected 0,0). "
-                        "AGIPD 3D CXI requires module-local coordinates starting at (0,0)."
-                    )
+            mod_min_ss = min(pm['min_ss'] for pm in mod_panels)
+            mod_min_fs = min(pm['min_fs'] for pm in mod_panels)
+            if mod_min_ss != 0 or mod_min_fs != 0:
+                raise ValueError(
+                    f"Module {mod_key}: first panel starts at "
+                    f"(min_ss={mod_min_ss}, min_fs={mod_min_fs}), expected (0, 0). "
+                    "AGIPD 3D CXI requires module-local coordinates starting at (0,0)."
+                )
 
 
 def test_agipd_cli_mutual_exclusion_flag_check():
