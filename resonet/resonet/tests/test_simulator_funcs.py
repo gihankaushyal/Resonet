@@ -477,6 +477,17 @@ def test_apply_agipd_noise_lg_zone_adu_scale():
     np.testing.assert_allclose(np.mean(out), 3000.0 * 1, rtol=0.05)
 
 
+def test_apply_agipd_noise_mg_zone_adu_scale():
+    """MG pixels (t1 < count <= t2) are multiplied by 8 ADU/photon."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.full((5000,), 500.0, dtype=np.float32)  # all MG (65 < 500 <= 2000)
+    out = apply_agipd_noise(img, t1=65, t2=2000,
+                            adu_hg=64, adu_mg=8, adu_lg=1,
+                            sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                            rng=np.random.default_rng(0))
+    np.testing.assert_allclose(np.mean(out), 500.0 * 8, rtol=0.05)
+
+
 def test_apply_agipd_noise_hg_receives_sigma_hg():
     """HG pixels receive sigma_hg readout noise; larger sigma → more spread."""
     from resonet.sims.make_sims import apply_agipd_noise

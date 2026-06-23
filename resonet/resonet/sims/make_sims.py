@@ -364,6 +364,9 @@ def apply_agipd_noise(img, t1=65, t2=2000,
             f"apply_agipd_noise: all sigma values must be non-negative; "
             f"got hg={sigma_hg}, mg={sigma_mg}, lg={sigma_lg}."
         )
+    # No sat_* parameter: ADU output is clipped to uint16 in main.py downstream.
+    # Unlike apply_epix_noise/apply_jungfrau_noise, max ADU values (HG: ~4160,
+    # LG: ~65k) stay well within uint16 range, so no in-function saturation is needed.
     if rng is None:
         rng = np.random.default_rng()
     out = rng.poisson(np.maximum(img, 0)).astype(np.float32)
