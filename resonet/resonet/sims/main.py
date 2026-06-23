@@ -1,4 +1,21 @@
+import re
 
+_MODPANEL_RE = re.compile(r'^p(\d+)a\d+$')
+
+
+def _group_by_module(panel_map):
+    """Detect AGIPD-style module grouping from pXaY panel names.
+
+    Returns dict {module_idx: [panel_dicts]} if all panels match pXaY naming
+    and there are at least 2 distinct modules. Returns None otherwise (2D path).
+    """
+    modules = {}
+    for pm in panel_map:
+        m = _MODPANEL_RE.match(pm['name'])
+        if not m:
+            return None
+        modules.setdefault(int(m.group(1)), []).append(pm)
+    return modules if len(modules) > 1 else None
 
 
 def args(use_joblib=False):
