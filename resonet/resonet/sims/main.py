@@ -209,10 +209,26 @@ def run(args, seeds, jid, njobs, gvec=None):
         from resonet.sims.cxi_writer import CXIWriter
         _geom_det, _panel_map, _geom_globals = parse_geom(args.geomfile)
         DET = _geom_det
-        _n_ss = max(pm['max_ss'] for pm in _panel_map) + 1
-        _n_fs = max(pm['max_fs'] for pm in _panel_map) + 1
-        xdim, ydim = _n_fs, _n_ss
-        mask = np.ones((_n_ss, _n_fs), bool)
+        _module_groups = _group_by_module(_panel_map)
+        if _module_groups is not None:
+            _n_modules = len(_module_groups)
+            _ss_per_mod = max(pm['max_ss'] for pm in _module_groups[0]) + 1
+            _fs_per_mod = max(pm['max_fs'] for pm in _module_groups[0]) + 1
+            _frame_shape = (_n_modules, _ss_per_mod, _fs_per_mod)
+            xdim, ydim = _fs_per_mod, _ss_per_mod
+            mask = np.ones((_ss_per_mod, _fs_per_mod), bool)
+            # Build name→pixel_offset map for fast lookup during assembly
+            _panel_pix_offset = {}
+            _offset = 0
+            for pm in _panel_map:
+                _panel_pix_offset[pm['name']] = _offset
+                _offset += pm['n_fast'] * pm['n_slow']
+        else:
+            _n_ss = max(pm['max_ss'] for pm in _panel_map) + 1
+            _n_fs = max(pm['max_fs'] for pm in _panel_map) + 1
+            _frame_shape = (_n_ss, _n_fs)
+            xdim, ydim = _n_fs, _n_ss
+            mask = np.ones((_n_ss, _n_fs), bool)
         pixsize = 1000.0 / _geom_globals['res']
         _pixel_offsets = []
         _offset = 0
@@ -381,7 +397,7 @@ def run(args, seeds, jid, njobs, gvec=None):
             o.write("\nConfiguration (paths_and_const.py):\n%s" % config)
 
     if _outfmt_cxi:
-        _cxi_writer = CXIWriter(outname, (_n_ss, _n_fs), _cxi_meta)
+        _cxi_writer = CXIWriter(outname, _frame_shape, _cxi_meta)
         try:
             if args.randAxis:
                 assert gvec is not None
@@ -463,16 +479,30 @@ def run(args, seeds, jid, njobs, gvec=None):
                     assert flat_img.size == n_px_expected, (
                         f"flat_img size {flat_img.size} != expected {n_px_expected} panel pixels"
                     )
-                    unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
-                    for pm, pix_off in zip(_panel_map, _pixel_offsets):
-                        n_px = pm['n_fast'] * pm['n_slow']
-                        panel_data = flat_img[pix_off:pix_off + n_px].reshape(
-                            pm['n_slow'], pm['n_fast']
-                        )
-                        unassembled[
-                            pm['min_ss']:pm['max_ss'] + 1,
-                            pm['min_fs']:pm['max_fs'] + 1
-                        ] = panel_data
+                    unassembled = np.zeros(_frame_shape, dtype=np.float32)
+                    if _module_groups is not None:
+                        for mod_idx, panels in sorted(_module_groups.items()):
+                            for pm in panels:
+                                pix_off = _panel_pix_offset[pm['name']]
+                                n_px = pm['n_fast'] * pm['n_slow']
+                                panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                                    pm['n_slow'], pm['n_fast']
+                                )
+                                unassembled[
+                                    mod_idx,
+                                    pm['min_ss']:pm['max_ss'] + 1,
+                                    pm['min_fs']:pm['max_fs'] + 1,
+                                ] = panel_data
+                    else:
+                        for pm, pix_off in zip(_panel_map, _pixel_offsets):
+                            n_px = pm['n_fast'] * pm['n_slow']
+                            panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                                pm['n_slow'], pm['n_fast']
+                            )
+                            unassembled[
+                                pm['min_ss']:pm['max_ss'] + 1,
+                                pm['min_fs']:pm['max_fs'] + 1,
+                            ] = panel_data
                     unassembled = np.clip(unassembled, 0, 65535).astype(np.uint16)
                     _cxi_writer.add_frame(unassembled, labels=shot_labels)
                 t = time.time() - t
