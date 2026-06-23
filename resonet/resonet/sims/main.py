@@ -71,6 +71,14 @@ def args(use_joblib=False):
                         metavar="SAT",
                         help="Jungfrau G2 ADC saturation limit in photon counts. "
                              "Pixels above this are clipped. Only active with --geom jungfrau. Default: 3400")
+    parser.add_argument("--agipd-gain-thresh", dest="agipdGainThresh", nargs=2, type=float,
+                        default=[65, 2000], metavar=("T1", "T2"),
+                        help="AGIPD HG->MG and MG->LG thresholds in photon counts. "
+                             "Only active with --geom agipd. Default: 65 2000")
+    parser.add_argument("--agipd-noise-sigma", dest="agipdNoiseSigma", nargs=3, type=float,
+                        default=[7.0, 3.0, 1.5], metavar=("HG", "MG", "LG"),
+                        help="AGIPD readout noise RMS in ADU per gain zone (HG, MG, LG). "
+                             "Only active with --geom agipd. Default: 7.0 3.0 1.5")
     parser.add_argument("--varyBgScale", action="store_true", help="if true, vary background scale by factor in range 0.05-1.5")
     parser.add_argument("--beamStop", action="store_true", help="if true, add a random beamstop mask to each simulated shot")
     parser.add_argument("--randDist", action="store_true", help="randomize the detector distance")
@@ -376,6 +384,28 @@ def run(args, seeds, jid, njobs, gvec=None):
         HS.jungfrau_noise_sigma = args.jungfrauNoiseSigma
         HS.jungfrau_sat_g2 = args.jungfrauSatG2
         HS._jungfrau_rng = np.random.default_rng(seeds[jid])
+    _agipd_argv_flags = any(
+        f'--{flag}' in sys.argv
+        for flag in ('agipd-gain-thresh', 'agipd-noise-sigma')
+    )
+    if _agipd_argv_flags and getattr(args, 'geom', None) != 'agipd':
+        raise ValueError(
+            "--agipd-gain-thresh/--agipd-noise-sigma were specified but --geom is not 'agipd'. "
+            "The AGIPD noise model requires --geom agipd. "
+            "Either remove the agipd flags or add '--geom agipd'."
+        )
+    if getattr(args, 'geom', None) == 'agipd':
+        _t1, _t2 = args.agipdGainThresh
+        if _t1 >= _t2:
+            raise ValueError(f"--agipd-gain-thresh T1 ({_t1}) must be < T2 ({_t2}).")
+        if any(s < 0 for s in args.agipdNoiseSigma):
+            raise ValueError(
+                f"--agipd-noise-sigma values must be non-negative; got {args.agipdNoiseSigma}."
+            )
+        HS.agipd_mode = True
+        HS.agipd_gain_thresh = tuple(args.agipdGainThresh)
+        HS.agipd_noise_sigma = tuple(args.agipdNoiseSigma)
+        HS._agipd_rng = np.random.default_rng(seeds[jid])
     if args.fluxRange is not None:
         _f1, _f2 = args.fluxRange
         if _f1 <= 0 or _f2 <= 0:
