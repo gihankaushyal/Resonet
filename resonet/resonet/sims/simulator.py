@@ -78,6 +78,10 @@ class Simulator:
         self.jungfrau_noise_sigma = (0.2, 1.5, 15.0)  # readout noise RMS per zone (photon-equiv)
         self.jungfrau_sat_g2 = 3400           # G2 ADC saturation limit (photon counts)
         self._jungfrau_rng = np.random.default_rng()  # persistent RNG; seed via HS._jungfrau_rng = np.random.default_rng(seed)
+        self.agipd_mode = False
+        self.agipd_gain_thresh = (65, 2000)
+        self.agipd_noise_sigma = (7.0, 3.0, 1.5)
+        self._agipd_rng = np.random.default_rng()
         self.gpud = self.exascale_api = self.gpu_channels_type = None
         if self.cuda:
             try:
@@ -412,7 +416,7 @@ class Simulator:
             S.panel_id = 0  # noise params are geometry-independent; reset for cleanliness
         # epix_mode and jungfrau_mode use their own noise pipelines instead of nanoBragg's
         # add_noise; set_noise configures S.D properties that are never read in those paths.
-        if not self.epix_mode and not self.jungfrau_mode:
+        if not self.epix_mode and not self.jungfrau_mode and not self.agipd_mode:
             make_sims.set_noise(S.D)
         noise_imgs = []
         all_spots_scaled = []
@@ -458,6 +462,17 @@ class Simulator:
                     sigma_g2=self.jungfrau_noise_sigma[2],
                     sat_g2=self.jungfrau_sat_g2,
                     rng=jungfrau_rng,
+                )
+            elif self.agipd_mode:
+                agipd_rng = self._agipd_rng
+                calib = agipd_rng.normal(1.0, paths_and_const.CALIB_NOISE_PCT / 100, size=img.shape).clip(0).astype(np.float32)
+                noise_img = make_sims.apply_agipd_noise(
+                    img * calib,
+                    t1=self.agipd_gain_thresh[0], t2=self.agipd_gain_thresh[1],
+                    sigma_hg=self.agipd_noise_sigma[0],
+                    sigma_mg=self.agipd_noise_sigma[1],
+                    sigma_lg=self.agipd_noise_sigma[2],
+                    rng=agipd_rng,
                 )
             else:
                 S.D.raw_pixels = flex.double(img.ravel())
