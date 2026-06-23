@@ -1,4 +1,21 @@
+import re
 
+_MODPANEL_RE = re.compile(r'^p(\d+)a\d+$')
+
+
+def _group_by_module(panel_map):
+    """Detect AGIPD-style module grouping from pXaY panel names.
+
+    Returns dict {module_idx: [panel_dicts]} if all panels match pXaY naming
+    and there are at least 2 distinct modules. Returns None otherwise (2D path).
+    """
+    modules = {}
+    for pm in panel_map:
+        m = _MODPANEL_RE.match(pm['name'])
+        if not m:
+            return None
+        modules.setdefault(int(m.group(1)), []).append(pm)
+    return modules if len(modules) > 1 else None
 
 
 def args(use_joblib=False):
@@ -54,6 +71,14 @@ def args(use_joblib=False):
                         metavar="SAT",
                         help="Jungfrau G2 ADC saturation limit in photon counts. "
                              "Pixels above this are clipped. Only active with --geom jungfrau. Default: 3400")
+    parser.add_argument("--agipd-gain-thresh", dest="agipdGainThresh", nargs=2, type=float,
+                        default=[65, 2000], metavar=("T1", "T2"),
+                        help="AGIPD HG->MG and MG->LG thresholds in photon counts. "
+                             "Only active with --geom agipd. Default: 65 2000")
+    parser.add_argument("--agipd-noise-sigma", dest="agipdNoiseSigma", nargs=3, type=float,
+                        default=[7.0, 3.0, 1.5], metavar=("HG", "MG", "LG"),
+                        help="AGIPD readout noise RMS in ADU per gain zone (HG, MG, LG). "
+                             "Only active with --geom agipd. Default: 7.0 3.0 1.5")
     parser.add_argument("--varyBgScale", action="store_true", help="if true, vary background scale by factor in range 0.05-1.5")
     parser.add_argument("--beamStop", action="store_true", help="if true, add a random beamstop mask to each simulated shot")
     parser.add_argument("--randDist", action="store_true", help="randomize the detector distance")
@@ -191,17 +216,53 @@ def run(args, seeds, jid, njobs, gvec=None):
         from resonet.sims.geom_parser import parse_geom
         from resonet.sims.cxi_writer import CXIWriter
         _geom_det, _panel_map, _geom_globals = parse_geom(args.geomfile)
+        if not _panel_map:
+            raise ValueError(
+                f"Geom file '{args.geomfile}' contains no panel definitions. "
+                "Check that the file is a valid CrystFEL geometry file."
+            )
         DET = _geom_det
-        _n_ss = max(pm['max_ss'] for pm in _panel_map) + 1
-        _n_fs = max(pm['max_fs'] for pm in _panel_map) + 1
-        xdim, ydim = _n_fs, _n_ss
-        mask = np.ones((_n_ss, _n_fs), bool)
-        pixsize = 1000.0 / _geom_globals['res']
+        _module_groups = _group_by_module(_panel_map)
+        # Build pixel offsets once; the 3D path derives a name-keyed dict from it.
         _pixel_offsets = []
         _offset = 0
         for pm in _panel_map:
             _pixel_offsets.append(_offset)
             _offset += pm['n_fast'] * pm['n_slow']
+        if _module_groups is not None:
+            _n_modules = len(_module_groups)
+            _first_mod = _module_groups[min(_module_groups.keys())]
+            _ss_per_mod = max(pm['max_ss'] for pm in _first_mod) + 1
+            _fs_per_mod = max(pm['max_fs'] for pm in _first_mod) + 1
+            for _mod_key, _mod_panels in _module_groups.items():
+                _mod_ss = max(pm['max_ss'] for pm in _mod_panels) + 1
+                _mod_fs = max(pm['max_fs'] for pm in _mod_panels) + 1
+                if _mod_ss != _ss_per_mod or _mod_fs != _fs_per_mod:
+                    raise ValueError(
+                        f"Module {_mod_key} has extent ({_mod_ss}, {_mod_fs}) but module "
+                        f"{min(_module_groups.keys())} has ({_ss_per_mod}, {_fs_per_mod}). "
+                        "The geom file appears to use global coordinates rather than "
+                        "module-local coordinates. Only module-local coordinate geom files "
+                        "are supported for 3D CXI output."
+                    )
+                for pm in _mod_panels:
+                    if pm['min_ss'] != 0 or pm['min_fs'] != 0:
+                        raise ValueError(
+                            f"Panel '{pm['name']}' in module {_mod_key} has "
+                            f"min_ss={pm['min_ss']}, min_fs={pm['min_fs']} (expected 0,0). "
+                            "AGIPD 3D CXI requires module-local coordinates starting at (0,0)."
+                        )
+            _frame_shape = (_n_modules, _ss_per_mod, _fs_per_mod)
+            xdim, ydim = _fs_per_mod, _ss_per_mod
+            mask = np.ones((_ss_per_mod, _fs_per_mod), bool)
+            # Derive name→offset map from _pixel_offsets; iteration order matches _panel_map.
+            _panel_pix_offset = {pm['name']: off for pm, off in zip(_panel_map, _pixel_offsets)}
+        else:
+            _n_ss = max(pm['max_ss'] for pm in _panel_map) + 1
+            _n_fs = max(pm['max_fs'] for pm in _panel_map) + 1
+            _frame_shape = (_n_ss, _n_fs)
+            xdim, ydim = _n_fs, _n_ss
+            mask = np.ones((_n_ss, _n_fs), bool)
         _wavelength_m = 1239.84193e-9 / _geom_globals['photon_energy']
         _cxi_meta = {
             'detector_name': args.detector_name,
@@ -331,6 +392,28 @@ def run(args, seeds, jid, njobs, gvec=None):
         HS.jungfrau_noise_sigma = args.jungfrauNoiseSigma
         HS.jungfrau_sat_g2 = args.jungfrauSatG2
         HS._jungfrau_rng = np.random.default_rng(seeds[jid])
+    _agipd_argv_flags = any(
+        f'--{flag}' in sys.argv
+        for flag in ('agipd-gain-thresh', 'agipd-noise-sigma')
+    )
+    if _agipd_argv_flags and getattr(args, 'geom', None) != 'agipd':
+        raise ValueError(
+            "--agipd-gain-thresh/--agipd-noise-sigma were specified but --geom is not 'agipd'. "
+            "The AGIPD noise model requires --geom agipd. "
+            "Either remove the agipd flags or add '--geom agipd'."
+        )
+    if getattr(args, 'geom', None) == 'agipd':
+        _t1, _t2 = args.agipdGainThresh
+        if _t1 >= _t2:
+            raise ValueError(f"--agipd-gain-thresh T1 ({_t1}) must be < T2 ({_t2}).")
+        if any(s < 0 for s in args.agipdNoiseSigma):
+            raise ValueError(
+                f"--agipd-noise-sigma values must be non-negative; got {args.agipdNoiseSigma}."
+            )
+        HS.agipd_mode = True
+        HS.agipd_gain_thresh = tuple(args.agipdGainThresh)
+        HS.agipd_noise_sigma = tuple(args.agipdNoiseSigma)
+        HS._agipd_rng = np.random.default_rng(seeds[jid])
     if args.fluxRange is not None:
         _f1, _f2 = args.fluxRange
         if _f1 <= 0 or _f2 <= 0:
@@ -364,7 +447,7 @@ def run(args, seeds, jid, njobs, gvec=None):
             o.write("\nConfiguration (paths_and_const.py):\n%s" % config)
 
     if _outfmt_cxi:
-        _cxi_writer = CXIWriter(outname, (_n_ss, _n_fs), _cxi_meta)
+        _cxi_writer = CXIWriter(outname, _frame_shape, _cxi_meta)
         try:
             if args.randAxis:
                 assert gvec is not None
@@ -446,16 +529,30 @@ def run(args, seeds, jid, njobs, gvec=None):
                     assert flat_img.size == n_px_expected, (
                         f"flat_img size {flat_img.size} != expected {n_px_expected} panel pixels"
                     )
-                    unassembled = np.zeros((_n_ss, _n_fs), dtype=np.float32)
-                    for pm, pix_off in zip(_panel_map, _pixel_offsets):
-                        n_px = pm['n_fast'] * pm['n_slow']
-                        panel_data = flat_img[pix_off:pix_off + n_px].reshape(
-                            pm['n_slow'], pm['n_fast']
-                        )
-                        unassembled[
-                            pm['min_ss']:pm['max_ss'] + 1,
-                            pm['min_fs']:pm['max_fs'] + 1
-                        ] = panel_data
+                    unassembled = np.zeros(_frame_shape, dtype=np.float32)
+                    if _module_groups is not None:
+                        for mod_idx, panels in sorted(_module_groups.items()):
+                            for pm in panels:
+                                pix_off = _panel_pix_offset[pm['name']]
+                                n_px = pm['n_fast'] * pm['n_slow']
+                                panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                                    pm['n_slow'], pm['n_fast']
+                                )
+                                unassembled[
+                                    mod_idx,
+                                    pm['min_ss']:pm['max_ss'] + 1,
+                                    pm['min_fs']:pm['max_fs'] + 1,
+                                ] = panel_data
+                    else:
+                        for pm, pix_off in zip(_panel_map, _pixel_offsets):
+                            n_px = pm['n_fast'] * pm['n_slow']
+                            panel_data = flat_img[pix_off:pix_off + n_px].reshape(
+                                pm['n_slow'], pm['n_fast']
+                            )
+                            unassembled[
+                                pm['min_ss']:pm['max_ss'] + 1,
+                                pm['min_fs']:pm['max_fs'] + 1,
+                            ] = panel_data
                     unassembled = np.clip(unassembled, 0, 65535).astype(np.uint16)
                     _cxi_writer.add_frame(unassembled, labels=shot_labels)
                 t = time.time() - t

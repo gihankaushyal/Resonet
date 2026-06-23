@@ -431,3 +431,128 @@ def test_reso2radius_high_reso_gives_large_radius():
     r_hi = reso2radius(1.5, det, beam)  # high reso (small d) → large angle
     r_lo = reso2radius(10.0, det, beam)  # low reso (large d) → small angle
     assert r_hi > r_lo
+
+
+# ---------------------------------------------------------------------------
+# apply_agipd_noise
+# ---------------------------------------------------------------------------
+
+def test_apply_agipd_noise_output_shape_and_dtype():
+    """Output shape matches input; dtype is float32."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.zeros((16, 512, 128), dtype=np.float32)
+    out = apply_agipd_noise(img, rng=np.random.default_rng(0))
+    assert out.shape == img.shape
+    assert out.dtype == np.float32
+
+
+def test_apply_agipd_noise_nonnegative():
+    """All output pixels are >= 0."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.zeros((200, 200), dtype=np.float32)
+    out = apply_agipd_noise(img, rng=np.random.default_rng(1))
+    assert np.all(out >= 0)
+
+
+def test_apply_agipd_noise_hg_zone_adu_scale():
+    """HG pixels (≤ t1) are multiplied by 64 ADU/photon."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    # 30 photons, all HG; with zero sigma, output ≈ 30*64 = 1920 ADU (Poisson noise)
+    img = np.full((5000,), 30.0, dtype=np.float32)
+    out = apply_agipd_noise(img, t1=65, t2=2000,
+                            adu_hg=64, adu_mg=8, adu_lg=1,
+                            sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                            rng=np.random.default_rng(0))
+    np.testing.assert_allclose(np.mean(out), 30.0 * 64, rtol=0.05)
+
+
+def test_apply_agipd_noise_lg_zone_adu_scale():
+    """LG pixels (> t2) are multiplied by 1 ADU/photon."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.full((5000,), 3000.0, dtype=np.float32)
+    out = apply_agipd_noise(img, t1=65, t2=2000,
+                            adu_hg=64, adu_mg=8, adu_lg=1,
+                            sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                            rng=np.random.default_rng(0))
+    np.testing.assert_allclose(np.mean(out), 3000.0 * 1, rtol=0.05)
+
+
+def test_apply_agipd_noise_mg_zone_adu_scale():
+    """MG pixels (t1 < count <= t2) are multiplied by 8 ADU/photon."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.full((5000,), 500.0, dtype=np.float32)  # all MG (65 < 500 <= 2000)
+    out = apply_agipd_noise(img, t1=65, t2=2000,
+                            adu_hg=64, adu_mg=8, adu_lg=1,
+                            sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                            rng=np.random.default_rng(0))
+    np.testing.assert_allclose(np.mean(out), 500.0 * 8, rtol=0.05)
+
+
+def test_apply_agipd_noise_hg_receives_sigma_hg():
+    """HG pixels receive sigma_hg readout noise; larger sigma → more spread."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.full((2000,), 10.0, dtype=np.float32)  # all HG (≤ 65)
+    out_large = apply_agipd_noise(img, t1=65, t2=2000,
+                                  sigma_hg=100.0, sigma_mg=0.0, sigma_lg=0.0,
+                                  rng=np.random.default_rng(0))
+    out_zero = apply_agipd_noise(img, t1=65, t2=2000,
+                                 sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                                 rng=np.random.default_rng(0))
+    assert np.std(out_large) > np.std(out_zero) + 10.0
+
+
+def test_apply_agipd_noise_mg_receives_sigma_mg():
+    """MG pixels receive sigma_mg readout noise."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.full((2000,), 500.0, dtype=np.float32)  # all MG (65 < 500 ≤ 2000)
+    out_large = apply_agipd_noise(img, t1=65, t2=2000,
+                                  sigma_hg=0.0, sigma_mg=100.0, sigma_lg=0.0,
+                                  rng=np.random.default_rng(0))
+    out_zero = apply_agipd_noise(img, t1=65, t2=2000,
+                                 sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                                 rng=np.random.default_rng(0))
+    assert np.std(out_large) > np.std(out_zero) + 10.0
+
+
+def test_apply_agipd_noise_lg_receives_sigma_lg():
+    """LG pixels receive sigma_lg readout noise."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = np.full((2000,), 5000.0, dtype=np.float32)  # all LG (> 2000)
+    out_large = apply_agipd_noise(img, t1=65, t2=2000,
+                                  sigma_hg=0.0, sigma_mg=0.0, sigma_lg=100.0,
+                                  rng=np.random.default_rng(0))
+    out_zero = apply_agipd_noise(img, t1=65, t2=2000,
+                                 sigma_hg=0.0, sigma_mg=0.0, sigma_lg=0.0,
+                                 rng=np.random.default_rng(0))
+    assert np.std(out_large) > np.std(out_zero) + 5.0
+
+
+def test_apply_agipd_noise_default_rng():
+    """rng=None constructs an internal RNG; runs without error."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    out = apply_agipd_noise(np.zeros((20,), dtype=np.float32))
+    assert out.shape == (20,)
+    assert np.all(out >= 0)
+
+
+def test_apply_agipd_noise_t1_ge_t2_raises():
+    """t1 >= t2 raises ValueError."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    with pytest.raises(ValueError, match="t1"):
+        apply_agipd_noise(np.zeros((10,), dtype=np.float32), t1=2000, t2=65)
+
+
+def test_apply_agipd_noise_negative_sigma_raises():
+    """Negative sigma raises ValueError."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    with pytest.raises(ValueError, match="sigma"):
+        apply_agipd_noise(np.zeros((10,), dtype=np.float32), sigma_hg=-1.0)
+
+
+def test_apply_agipd_noise_deterministic_with_rng():
+    """Same RNG seed produces identical output."""
+    from resonet.sims.make_sims import apply_agipd_noise
+    img = (np.random.default_rng(7).random((100, 100)) * 100).astype(np.float32)
+    out1 = apply_agipd_noise(img, rng=np.random.default_rng(42))
+    out2 = apply_agipd_noise(img, rng=np.random.default_rng(42))
+    np.testing.assert_array_equal(out1, out2)
