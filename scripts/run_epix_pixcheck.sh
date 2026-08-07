@@ -10,7 +10,7 @@
 #SBATCH --nodelist=scg020
 #SBATCH --output=epix_pixcheck_%j.log
 
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 
 cp resonet/resonet/sims/main.py simforge/envs/simtbx_mpi/lib/python3.9/site-packages/resonet/sims/main.py

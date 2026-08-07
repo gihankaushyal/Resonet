@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This project requires a specific HPC environment. Always source the environment before running any resonet commands:
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 ```
 
 This loads gcc-12.1.0, cuda-12.8.1, openmpi/5.0.8, and activates the `simtbx_mpi` conda environment located at `/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/`.
@@ -16,6 +16,28 @@ When running GPU jobs with srun/sbatch, also export:
 ```bash
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 ```
+
+**Interactive shells:** a `SessionStart` hook (`.claude/hooks/activate-env.sh`) now
+prepends the `simtbx_mpi` env to `PATH` for every Bash tool call, so bare `python`
+resolves without sourcing `setup_resonet.sh` each time. Heavy MPI/CUDA simulation
+still goes through sbatch, whose job script sources the full environment itself.
+
+## Key Paths — verify before Read
+
+**Rule:** never `Read` a path you have not confirmed exists. `ls`/`find` a scoped
+directory first, then Read. Guessing `.geom` and simulation paths, plus bare
+recursive searches over this large tree, are the top sources of "File does not
+exist" errors and 20 s ripgrep timeouts. Always scope `find`/`grep` to a subdir.
+
+| What | Where |
+|------|-------|
+| Detector geometry | `geoms/*.geom` (AGIPD, Epix10k, Eigar) |
+| CXI / production data | `production/`, `hitfinder_100k/` |
+| Job logs | `logs/` (newest: `ls -1t logs/* | head`) |
+| Source code | `resonet/` — but read `MINDMAP.md` first (see below) |
+| Sample files | `sample_files/` |
+
+The `/resume` skill and `/watch-slurm` skill automate log/queue discovery.
 
 ## Codebase Navigation
 
@@ -77,7 +99,7 @@ cd resonet && python -m pytest resonet/tests/ -v
 Use `run_hitfinder.sh` as a template. Key SLURM parameters for this cluster:
 - Partition: `general`, QOS: `grp_cxfel`
 - GPU resources: `--gres=gpu:N` (use 2–6 depending on rank count; scg020 has 8x H100)
-- Always source `load_resonet.sh` inside the job script
+- Always source `setup_resonet.sh` inside the job script
 
 To resume a training run from a checkpoint, use `run_hitfinder_resume.sh` (uses 4 GPUs).
 SLURM job logs are written to the project root as `<jobname>_<jobid>.log`.
@@ -135,6 +157,12 @@ Simulation outputs and training data are stored as HDF5 files (`compressed*.h5`)
 
 The `resonet-mergefiles` script combines per-rank HDF5 outputs from MPI runs into a single master file for training.
 
+## Script Placement
+
+- **All new scripts** (`*.sh`, `*.py`, and any other standalone scripts) → save to `/data/bioxfel/user/gihan/Resonet/scripts/`
+- **Log files** (`*.log`) → write to `/data/bioxfel/user/gihan/Resonet/logs/`
+- **Codebase source code** (new modules, entrypoints, utilities that belong to the package) → save to the appropriate location within `resonet/resonet/` or the relevant subpackage
+
 ## Feature Development Workflow
 
 When discussing or implementing a new feature, always follow this sequence:
@@ -152,8 +180,8 @@ When discussing or implementing a new feature, always follow this sequence:
 - **Branch naming**: use kebab-case, descriptive, matching the feature name used in `docs/superpowers/`.
 - **After merging to main**: do NOT delete the feature branch — it may be revisited in future sessions.
 - **Before opening a PR into main**, always run both:
-  1. `/code-review` — checks for bugs, correctness, and code quality
-  2. `/pr-review-toolkit:review-pr` — ensures compliance with project conventions
+  1. `/code-review:code-review` — checks for bugs, correctness, and code quality
+  ## 2. `/pr-review-toolkit:review-pr` — ensures compliance with project conventions
 
 ## Claude Code Integration
 

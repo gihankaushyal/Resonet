@@ -66,7 +66,7 @@ multi-lattice flag, ice-ring content, Bragg spot count.
 ├── easyBragg/                        # Python wrappers for nanoBragg (reference / not used directly)
 ├── simforge/                         # micromamba conda installation — DO NOT EDIT
 │   └── envs/simtbx_mpi/             # active conda env with simtbx, torch, h5py, etc.
-├── load_resonet.sh                   # source this before ANY resonet command
+├── setup_resonet.sh                   # source this before ANY resonet command
 ├── run_hitfinder.sh                  # SLURM job template — full simulation run
 ├── run_hitfinder_resume.sh           # SLURM job template — partial-rank resumption
 ├── hitfinder_100k/                   # example 100k-shot dataset directory
@@ -300,7 +300,7 @@ for epoch in range(start_ep, max_ep):
 
 ```bash
 # Always required before any resonet command:
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 
 # Additional export for GPU SLURM jobs:
 export LD_LIBRARY_PATH=.../simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH

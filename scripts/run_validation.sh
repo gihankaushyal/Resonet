@@ -11,7 +11,7 @@
 #SBATCH --output=hitfinder_val_%j.log
 
 # Load your verified environment stack
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 
 # GPU and HPC-X library paths
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH

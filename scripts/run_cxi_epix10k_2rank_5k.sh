@@ -10,7 +10,7 @@
 #SBATCH --nodelist=scg020
 #SBATCH --output=epix10k_2r_5k_r2%j.log
 
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 
 # Test all ePix10k gain-noise branch features:

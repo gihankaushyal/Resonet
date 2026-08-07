@@ -95,7 +95,7 @@ def test_global_params():
 - [ ] **Step 1.2: Run tests to confirm they fail**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python -m pytest resonet/tests/test_geom_parser.py -v 2>&1 | head -30
 ```
@@ -250,7 +250,7 @@ def parse_geom(path: str) -> tuple:
 - [ ] **Step 1.4: Run tests to confirm they pass**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python -m pytest resonet/tests/test_geom_parser.py -v
 ```
@@ -364,7 +364,7 @@ def test_add_frame_wrong_shape_raises():
 - [ ] **Step 2.2: Run tests to confirm they fail**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python -m pytest resonet/tests/test_cxi_writer.py -v 2>&1 | head -20
 ```
@@ -452,7 +452,7 @@ class CXIWriter:
 - [ ] **Step 2.4: Run tests to confirm they pass**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python -m pytest resonet/tests/test_cxi_writer.py -v
 ```
@@ -542,7 +542,7 @@ if not (multi_panel and len(shot_det) > 1):
 - [ ] **Step 3.2: Run existing tests to confirm no regressions**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python -m pytest resonet/tests/ -v -k "not test_geom_parser and not test_cxi_writer"
 ```
@@ -697,7 +697,7 @@ else:
 - [ ] **Step 4.7: Smoke-test CLI flags with --help**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 resonet-simulate --help | grep -E "outfmt|geomfile|detector.name"
 ```
 Expected: all three new flags appear in the help output.
@@ -859,7 +859,7 @@ if __name__ == '__main__':
 - [ ] **Step 5.2: Test merge script on two synthetic CXI files**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 python - <<'EOF'
 import numpy as np, h5py, os, tempfile
 
@@ -910,7 +910,7 @@ This task runs a real (CPU-mode, 4-shot) simulation end-to-end to confirm the fu
 - [ ] **Step 6.1: Run 4-shot CPU simulation with --outfmt cxi**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 resonet-simulate /tmp/cxi_e2e_test \
   --nshot 4 \
@@ -955,7 +955,7 @@ EOF
 - [ ] **Step 6.4: Verify merge works on real CXI output**
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python resonet/scripts/merge_h5s.py /tmp/cxi_e2e_test \
   /tmp/cxi_e2e_test/merged.cxi --cxi

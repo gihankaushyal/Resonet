@@ -10,7 +10,7 @@
 #SBATCH --nodelist=scg020
 #SBATCH --output=cxi_epix10k_5k_%j.log
 
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 
 # fluxRange calibrated from 1-shot ePix10k test at default FLUX (4e11):

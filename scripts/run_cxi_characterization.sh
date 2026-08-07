@@ -17,7 +17,7 @@
 # the RSS curve has flattened by shot 1000.
 # RSS is logged every 10 shots for shots 0-299, then every 50 shots after that.
 
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 export LD_LIBRARY_PATH=/data/bioxfel/user/gihan/Resonet/simforge/envs/simtbx_mpi/lib/python3.9/site-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
 
 srun --export=ALL resonet-simulate cxi_char_5k \

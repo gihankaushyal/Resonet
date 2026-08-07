@@ -313,7 +313,7 @@ resonet-mergefiles "epix10k_5k/compressed*.cxi" epix10k_5k_merged.cxi --cxi
 ## Running Tests
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 cd /data/bioxfel/user/gihan/Resonet/resonet
 python -m pytest resonet/tests/ -v
 ```

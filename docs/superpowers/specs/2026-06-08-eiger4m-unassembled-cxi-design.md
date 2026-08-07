@@ -199,7 +199,7 @@ against their respective `.geom` files.
 
 **Integration test** (single-rank, CPU, 4 shots):
 ```bash
-source load_resonet.sh
+source setup_resonet.sh
 resonet-simulate /tmp/cxi_test --nshot 4 --outfmt cxi \
   --geomfile geoms/Eigar.geom --detector-name "EIGER 4M" \
   --ngpu 0 --cpuMode

@@ -31,7 +31,7 @@
 All commands must be run with the resonet environment loaded:
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 ```
 
 Run tests with:
@@ -884,7 +884,7 @@ EOF
 ## Manual Verification (after PR merges)
 
 ```bash
-source /data/bioxfel/user/gihan/Resonet/load_resonet.sh
+source /data/bioxfel/user/gihan/Resonet/setup_resonet.sh
 mkdir -p /tmp/agipd_test
 
 # 1-shot test — no GPU needed to verify shape

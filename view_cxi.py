@@ -1,11 +1,7 @@
-"""Quick CXI frame viewer — arrow keys to scroll, escape to quit.
-
-Usage:
-  python view_cxi.py <file.cxi>                    # raw unassembled view
-  python view_cxi.py <file.cxi> <detector.geom>    # assembled view
-"""
+"""Quick CXI frame viewer — arrow keys to scroll, escape to quit."""
 import sys
 import re
+import argparse
 import h5py
 import numpy as np
 import matplotlib
@@ -50,6 +46,24 @@ def parse_geom_panels(geom_path):
     return [p for p in panels.values() if required.issubset(p)]
 
 
+def tile_modules(frame_3d, ncols=4):
+    """Tile a (n_modules, ss, fs) array into a 2-D grid for display.
+
+    Modules are arranged left-to-right, top-to-bottom in ncols columns.
+    Gaps of 4 pixels are inserted between modules.
+    """
+    n_mod, n_ss, n_fs = frame_3d.shape
+    nrows = (n_mod + ncols - 1) // ncols
+    gap = 4
+    canvas = np.zeros((nrows * (n_ss + gap) - gap, ncols * (n_fs + gap) - gap),
+                      dtype=frame_3d.dtype)
+    for m in range(n_mod):
+        r, c = divmod(m, ncols)
+        r0, c0 = r * (n_ss + gap), c * (n_fs + gap)
+        canvas[r0:r0 + n_ss, c0:c0 + n_fs] = frame_3d[m]
+    return canvas
+
+
 def assemble(raw_frame, panels):
     """Assemble panels onto a canvas using full affine placement.
 
@@ -77,12 +91,20 @@ def assemble(raw_frame, panels):
     canvas = np.zeros((y_max - y_min, x_max - x_min), dtype=np.float32)
 
     # Second pass: scatter pixels onto canvas
+    _mod_re = re.compile(r'^p(\d+)a\d+$')
     for p in panels:
         nf = int(p['max_fs'] - p['min_fs'] + 1)
         ns = int(p['max_ss'] - p['min_ss'] + 1)
         ss0 = int(p['min_ss'])
         fs0 = int(p['min_fs'])
-        patch = raw_frame[ss0:ss0 + ns, fs0:fs0 + nf]  # (ns, nf)
+        # 3-D frames (n_modules, ss, fs): index by module derived from panel name
+        if raw_frame.ndim == 3:
+            m = _mod_re.match(p.get('name', ''))
+            mod_idx = int(m.group(1)) if m else 0
+            frame_2d = raw_frame[mod_idx]
+        else:
+            frame_2d = raw_frame
+        patch = frame_2d[ss0:ss0 + ns, fs0:fs0 + nf]  # (ns, nf)
 
         i_fs, i_ss = np.meshgrid(np.arange(nf), np.arange(ns))  # both (ns, nf)
         col = np.round(p['corner_x'] + i_fs * p['fs_x'] + i_ss * p['ss_x']).astype(int) - x_min
@@ -95,13 +117,35 @@ def assemble(raw_frame, panels):
 
 
 # --- CLI args ---
-show_labels = '--labels' in sys.argv
-_positional = [a for a in sys.argv[1:] if not a.startswith('--')]
-if not _positional:
-    print(__doc__)
-    sys.exit(1)
-cxi_path = _positional[0]
-geom_path = _positional[1] if len(_positional) > 1 else None
+parser = argparse.ArgumentParser(
+    prog="view_cxi.py",
+    description="Quick CXI frame viewer — arrow keys to scroll, escape to quit.",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""
+examples:
+  python view_cxi.py data.cxi                        raw unassembled view
+  python view_cxi.py data.cxi geoms/AGIPD-2.geom     assembled view
+  python view_cxi.py data.cxi geoms/Eiger4M.geom --labels
+
+controls:
+  right / left arrow    next / previous frame
+  escape                quit
+
+notes:
+  3-D frames (e.g. AGIPD shape N×16×512×128) are tiled into a 2-D grid for
+  the raw view, or placed panel-by-panel for the assembled view.
+  Pass a CrystFEL .geom file as the second argument for assembled display.
+""",
+)
+parser.add_argument("cxi", metavar="file.cxi", help="CXI file to view")
+parser.add_argument("geom", metavar="detector.geom", nargs="?", default=None,
+                    help="CrystFEL .geom file for assembled view (optional)")
+parser.add_argument("--labels", action="store_true",
+                    help="overlay panel names on the assembled view")
+args = parser.parse_args()
+cxi_path = args.cxi
+geom_path = args.geom
+show_labels = args.labels
 
 h = h5py.File(cxi_path, "r")
 imgs = h["/entry_1/data_1/data"]
@@ -119,18 +163,25 @@ matplotlib.rcParams['keymap.back'].remove('left')
 matplotlib.rcParams['keymap.forward'].remove('right')
 
 
+is_3d = imgs.ndim == 4  # (N, modules, ss, fs)
+if is_3d:
+    print(f"3-D frames detected ({imgs.shape[1]} modules × {imgs.shape[2]} × {imgs.shape[3]})")
+
+
 def get_img(i):
     raw = imgs[i]
-    return assemble(raw, panels)[0] if panels else raw
+    if panels:
+        return assemble(raw, panels)[0]
+    return tile_modules(raw) if is_3d else raw
 
 
-fig, ax = plt.subplots(figsize=(8, 8) if panels else (4, 12))
+fig, ax = plt.subplots(figsize=(8, 8) if panels else (6, 8))
 fig.i = 0
 
 if panels:
     img0, canvas_x_min, canvas_y_min = assemble(imgs[0], panels)
 else:
-    img0 = imgs[0]
+    img0 = tile_modules(imgs[0]) if is_3d else imgs[0]
 nonzero = img0[img0 > 0]
 vmax0 = float(np.mean(nonzero) + 3.5 * np.std(nonzero)) if len(nonzero) else 1.0
 im = ax.imshow(img0, vmin=0, vmax=vmax0, cmap="gray_r",
